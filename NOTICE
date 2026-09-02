@@ -1,10 +1,10 @@
 codex-weixin is a clean-room independent WeChat bridge for OpenAI Codex.
 
-CodeX From WeChat is a derivative distribution based on codex-weixin v0.3.8
+Codex for WeChat is a derivative distribution based on codex-weixin v0.3.8
 by Xuechao Zou. The upstream MIT license and copyright notice are retained.
 This distribution adds sender-bound approvals, task interruption, and
 controlled browser tools. Its source is published at:
-https://github.com/WeihaoYYY/codex-from-wechat
+https://github.com/WeihaoYYY/Codex-for-WeChat
 
 The project structure and protocol boundaries were informed by the MIT-licensed
 Tencent/openclaw-weixin package and by public documentation in the WeChat/Codex

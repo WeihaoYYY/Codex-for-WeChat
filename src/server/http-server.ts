@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 
 import { z } from "zod";
 
+import { AutomationManager } from "../automation/manager.js";
+import { automationTokenMatches, ensureAutomationToken } from "../automation/token.js";
 import { resolveCodexCommand } from "../codex/exec-runner.js";
 import { loadConfig, saveConfig } from "../state/config.js";
 import type { StatePaths } from "../state/paths.js";
@@ -22,6 +24,16 @@ const accountDisplayNameSchema = z.object({
 });
 const accountDeleteSchema = z.object({
   retainHistory: z.boolean().optional()
+});
+const automationPushSchema = z.object({
+  text: z.string().min(1).max(256 * 1024),
+  idempotencyKey: z.string().max(200).optional()
+});
+const automationTaskSchema = z.object({
+  prompt: z.string().min(1).max(256 * 1024),
+  workspace: z.string().min(1).optional(),
+  title: z.string().max(80).optional(),
+  idempotencyKey: z.string().max(200).optional()
 });
 const sessionPatchSchema = z.object({
   title: z.string().max(80).optional(),
@@ -42,8 +54,14 @@ const configSchema = z.object({
   browserOutputDir: z.string().min(1).optional(),
   browserExecutablePath: z.string().nullable().optional(),
   browserHeadless: z.boolean().optional(),
-  browserAllowedDomains: z.array(z.string()).optional()
-});
+  browserAllowedDomains: z.array(z.string()).optional(),
+  automationEnabled: z.boolean().optional(),
+  automationAccountId: z.string().nullable().optional(),
+  automationSenderId: z.string().nullable().optional()
+}).refine(
+  (value) => !value.automationEnabled || Boolean(value.automationAccountId?.trim() && value.automationSenderId?.trim()),
+  "Choose exactly one proactive automation recipient"
+);
 const MAX_WEB_UPLOAD_FILES = 10;
 const MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
 
@@ -61,6 +79,8 @@ export type LocalHttpServerOptions = {
   codexModelsCheck?: () => Promise<CodexModelOption[]>;
   updateService?: UpdateService;
   onUpdateInstalled?: (version: string) => void;
+  automationManager?: AutomationManager;
+  automationToken?: string;
 };
 
 export type LocalHttpServer = {
@@ -77,6 +97,11 @@ export async function startLocalHttpServer(options: LocalHttpServerOptions): Pro
     accountManager: options.accountManager
   });
   const updateService = options.updateService ?? new UpdateManager({ currentVersion: productVersion });
+  const automationToken = options.automationToken ?? ensureAutomationToken(options.paths);
+  const automationManager = options.automationManager ?? new AutomationManager({
+    paths: options.paths,
+    accountManager: options.accountManager
+  });
   let actualPort = options.port ?? 8787;
   const server = http.createServer((request, response) => {
     void handleRequest(request, response, {
@@ -85,6 +110,8 @@ export async function startLocalHttpServer(options: LocalHttpServerOptions): Pro
       productVersion,
       requestToken,
       updateService,
+      automationToken,
+      automationManager,
       port: actualPort
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
@@ -113,6 +140,8 @@ type HandlerContext = LocalHttpServerOptions & {
   productVersion: string;
   requestToken: string;
   updateService: UpdateService;
+  automationToken: string;
+  automationManager: AutomationManager;
   port: number;
 };
 
@@ -124,7 +153,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
   }
   const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
   const method = request.method ?? "GET";
-  if (isMutation(method)) {
+  const isAutomationRequest = url.pathname.startsWith("/api/automation/");
+  if (isAutomationRequest) {
+    const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!automationTokenMatches(context.automationToken, bearer)) {
+      sendJson(response, 403, { error: "Invalid automation token" });
+      return;
+    }
+  } else if (isMutation(method)) {
     if (!isAllowedOrigin(request.headers.origin, context.port)) {
       sendJson(response, 403, { error: "Local origin required" });
       return;
@@ -133,6 +169,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       sendJson(response, 403, { error: "Invalid request token" });
       return;
     }
+  }
+
+  if (method === "POST" && url.pathname === "/api/automation/push") {
+    const body = automationPushSchema.parse(await readJsonBody(request));
+    const result = await context.automationManager.push(body);
+    sendJson(response, result.duplicate ? 200 : 201, result);
+    return;
+  }
+  if (method === "POST" && url.pathname === "/api/automation/tasks") {
+    const body = automationTaskSchema.parse(await readJsonBody(request));
+    const result = context.automationManager.createTask(body);
+    sendJson(response, result.duplicate ? 200 : 202, result);
+    return;
+  }
+  const automationTaskMatch = matchPath(url.pathname, "/api/automation/tasks/:jobId");
+  if (method === "GET" && automationTaskMatch) {
+    const job = context.automationManager.get(automationTaskMatch.jobId);
+    if (!job) {
+      sendJson(response, 404, { error: "Automation job not found" });
+      return;
+    }
+    sendJson(response, 200, { job });
+    return;
   }
 
   if (method === "GET" && url.pathname === "/api/bootstrap") {
@@ -373,7 +432,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       browserProfileDir: path.resolve(input.browserProfileDir ?? current.browserProfileDir),
       browserOutputDir: path.resolve(input.browserOutputDir ?? current.browserOutputDir),
       browserExecutablePath: optionalString(input.browserExecutablePath),
-      browserAllowedDomains: input.browserAllowedDomains ?? current.browserAllowedDomains
+      browserAllowedDomains: input.browserAllowedDomains ?? current.browserAllowedDomains,
+      automationEnabled: input.automationEnabled === true,
+      automationAccountId: optionalString(input.automationAccountId),
+      automationSenderId: optionalString(input.automationSenderId)
     });
     await context.accountManager.restartRunning();
     sendJson(response, 200, {

@@ -1,7 +1,7 @@
-<h1 align="center">CodeX From WeChat</h1>
+<h1 align="center">Codex for WeChat</h1>
 
 <p align="center">
-  <img src="src/web/favicon.svg" alt="CodeX From WeChat logo" width="128" height="128" />
+  <img src="src/web/favicon.svg" alt="Codex for WeChat logo" width="128" height="128" />
 </p>
 
 <p align="center">
@@ -12,10 +12,10 @@
   <strong>Send file, command, and controlled browser tasks from personal WeChat to local Codex.</strong>
 </p>
 
-**CodeX From WeChat** is an enhanced distribution based on [`XavierJiezou/codex-weixin`](https://github.com/XavierJiezou/codex-weixin) `v0.3.8`. It keeps the upstream WeChat, file-transfer, and session-management features while adding sender-bound approvals, immediate long-task interruption, and controlled browser tasks in an isolated profile.
+**Codex for WeChat** is an enhanced distribution based on [`XavierJiezou/codex-weixin`](https://github.com/XavierJiezou/codex-weixin) `v0.3.8`. It keeps the upstream WeChat, file-transfer, and session-management features while adding sender-bound approvals, immediate long-task interruption, proactive tasks, and controlled browser work in an isolated profile.
 
 ```text
-Personal WeChat <-> CodeX From WeChat <-> Codex App Server <-> allowed workspaces / isolated browser
+Personal WeChat <-> Codex for WeChat <-> Codex App Server <-> allowed workspaces / isolated browser
 ```
 
 It is not a general messaging gateway. The management page listens on `127.0.0.1` and is not exposed to the LAN or public Internet.
@@ -24,7 +24,7 @@ It is not a general messaging gateway. The management page listens on `127.0.0.1
 > This is a third-party open-source project, not an official OpenAI or WeChat integration. Authorize only your own sender and explicit workspace roots. Never publish the service state directory, WeChat tokens, Codex credentials, or browser profile.
 
 > [!NOTE]
-> The internal npm package and executable remain named `codex-weixin` for upstream compatibility; the repository and product name are **CodeX From WeChat**.
+> The internal npm package and executable remain named `codex-weixin` for upstream compatibility; the repository and product name are **Codex for WeChat**.
 
 ## Feature status
 
@@ -46,6 +46,7 @@ Screenshots live under `docs/images/screenshots/`. The Web management screenshot
 | ✅ | App-server first | New and resumed sessions prefer Codex app-server V2 and fall back to `codex exec` when unavailable. | Pending: `docs/images/screenshots/wechat-status.png` |
 | ✅ | WeChat approvals | Sender-bound, one-time `/approve`, `/approve-session`, and `/deny` codes answer command and file-change approval requests. | Pending: `docs/images/screenshots/wechat-approval.png` |
 | ✅ | Controlled browser | An isolated Chrome/Edge profile supports navigation, snapshots, filling, screenshots, and uploads with domain and consequential-action approval. | Pending: `docs/images/screenshots/wechat-browser.png` |
+| ✅ | Proactive tasks and notifications | Local ChatGPT/Codex automations can run a detached Codex session or push a completion to one configured WeChat recipient. | Pending: `docs/images/screenshots/wechat-proactive-task.png` |
 | ✅ | Web auto-update | Selects npm or npmmirror, updates the active npm runtime, verifies it, then restarts and reconnects. | Pending: `docs/images/screenshots/web-auto-update.png` |
 
 ## Web management preview
@@ -71,8 +72,8 @@ codex
 This enhanced distribution is not published to npm. Install from this repository; `npm install -g codex-weixin` installs the upstream package without WeChat approvals or browser tools.
 
 ```powershell
-git clone https://github.com/WeihaoYYY/codex-from-wechat.git
-Set-Location "codex-from-wechat"
+git clone https://github.com/WeihaoYYY/Codex-for-WeChat.git
+Set-Location "Codex-for-WeChat"
 npm ci
 npm run typecheck
 npm run build
@@ -83,7 +84,7 @@ The service opens [http://127.0.0.1:8787](http://127.0.0.1:8787). To use a fixed
 
 ```powershell
 $env:CODEX_WEIXIN_PORT="18787"
-$env:CODEX_WEIXIN_STATE_DIR="C:\Codex\codex-from-wechat-state"
+$env:CODEX_WEIXIN_STATE_DIR="C:\Codex\codex-for-wechat-state"
 $env:CODEX_WEIXIN_OPEN="0"
 npm start
 ```
@@ -98,7 +99,7 @@ codex-weixin
 To update a source installation later:
 
 ```powershell
-Set-Location "codex-from-wechat"
+Set-Location "Codex-for-WeChat"
 git pull --ff-only
 npm ci
 npm run build
@@ -205,6 +206,32 @@ WeChat turns use `approvalPolicy: "on-request"`. Commands, file changes, new bro
 
 The optional browser tools use an isolated persistent Chrome/Edge profile. Enable them in Settings, then send `/new` because dynamic tools are attached only when a new Codex thread starts. The first visit to a domain requires approval, and the isolated profile must be signed in separately from the user's everyday browser.
 
+## Proactive ChatGPT / Codex automation
+
+In Settings, enable **Proactive tasks and notifications** and select exactly one authorized WeChat recipient. The service creates a private `automation-token` in the state directory. It is never returned to the Web UI or APIs.
+
+```powershell
+codex-weixin push --text "Build completed" --idempotency-key "build-2026-09-02"
+
+codex-weixin task `
+  --prompt "Run the tests and summarize failures" `
+  --cwd "E:\Project" `
+  --title "Daily tests" `
+  --idempotency-key "daily-tests-2026-09-02"
+```
+
+`task` returns a job ID immediately; `--wait` waits for completion. Each proactive task gets a detached managed Codex session, so it does not switch the sender's active WeChat thread. The workspace must be allowlisted. Idempotency keys prevent duplicate execution, and the service caps requests at 30 per minute and 20 active jobs.
+
+Codex `agent-turn-complete` notifications can be forwarded through the official `notify` hook:
+
+```toml
+notify = ["node", "E:\\Codex\\Codex-for-WeChat\\dist\\server\\index.js", "notify"]
+```
+
+This config is optional and is never edited automatically. A ChatGPT desktop scheduled task can run the same `task` command, but local-project tasks require the computer, desktop app, and Codex for WeChat service to remain running. See [OpenAI scheduled tasks](https://learn.chatgpt.com/zh-Hans/docs/automations) and [Codex `notify`](https://learn.chatgpt.com/zh-Hans/docs/config-file/config-advanced).
+
+If the WeChat context token has expired, text is saved in a local delivery queue and flushed after that recipient sends the next message. Command and browser approvals still use the sender-bound `A1` workflow.
+
 ## Models and reasoning effort
 
 The Settings page loads available models and model-specific reasoning efforts from Codex app-server. Leaving a field on "Use Codex settings" preserves the Codex configuration; choosing and saving an explicit value applies it to later Web and WeChat turns.
@@ -226,6 +253,8 @@ Service state and the default Codex workspace share this directory:
   browser-profile/          Isolated persistent browser sign-in state
   browser-output/           Browser screenshots and other local output
   config.json               Codex and workspace configuration
+  automation-token          Local automation secret; never share it
+  automation-jobs.json      Job state, idempotency keys, and short prompt previews
   logs/
 ```
 
@@ -245,6 +274,7 @@ CODEX_WEIXIN_OPEN=0
 
 - Non-local Host and Origin values are rejected.
 - Every mutating API call requires an in-memory page token.
+- Proactive APIs use a separate persistent local secret and can target only the one configured recipient.
 - WeChat credentials never reach the management page.
 - Unknown senders are denied until explicitly allowed.
 - `/bind` accepts only absolute paths under the workspace allowlist.
@@ -270,7 +300,7 @@ When started from a source checkout with `npm run dev` or `npm start`, the Web p
 
 ## References and license
 
-- Enhanced source: [WeihaoYYY/codex-from-wechat](https://github.com/WeihaoYYY/codex-from-wechat)
+- Enhanced source: [WeihaoYYY/Codex-for-WeChat](https://github.com/WeihaoYYY/Codex-for-WeChat)
 - Upstream project: [XavierJiezou/codex-weixin](https://github.com/XavierJiezou/codex-weixin)
 - Codex CLI: [OpenAI Codex CLI](https://learn.chatgpt.com/zh-Hans/docs/codex/cli)
 - Authentication: [OpenAI Authentication](https://learn.chatgpt.com/zh-Hans/docs/auth)

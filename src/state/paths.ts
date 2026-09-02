@@ -16,6 +16,8 @@ export type StatePaths = {
   inboundDir: string;
   logsDir: string;
   runtimeDir: string;
+  automationTokenPath: string;
+  automationJobsPath: string;
 };
 
 export function resolveStatePaths(root = defaultStateDir()): StatePaths {
@@ -27,7 +29,9 @@ export function resolveStatePaths(root = defaultStateDir()): StatePaths {
     statePath: path.join(root, "state.json"),
     inboundDir: path.join(root, "inbound"),
     logsDir: path.join(root, "logs"),
-    runtimeDir: path.join(root, "runtime")
+    runtimeDir: path.join(root, "runtime"),
+    automationTokenPath: path.join(root, "automation-token"),
+    automationJobsPath: path.join(root, "automation-jobs.json")
   };
 }
 

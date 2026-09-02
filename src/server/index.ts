@@ -3,9 +3,11 @@ import { fileURLToPath } from "node:url";
 
 import open from "open";
 
+import { runAutomationCli } from "../automation/cli-client.js";
+import { ensureAutomationToken } from "../automation/token.js";
 import { resolveStatePaths } from "../state/paths.js";
 import { AccountManager } from "./account-manager.js";
-import { parseServerCommand, serverHelpText } from "./arguments.js";
+import { parseCliCommand, serverHelpText } from "./arguments.js";
 import { startLocalHttpServer } from "./http-server.js";
 import { acquireServiceProcessLock } from "./process-lock.js";
 import { launchRestartHelper } from "./restart.js";
@@ -14,6 +16,7 @@ async function main(): Promise<void> {
   const stateDir = process.env.CODEX_WEIXIN_STATE_DIR;
   const port = parsePort(process.env.CODEX_WEIXIN_PORT);
   const paths = resolveStatePaths(stateDir);
+  ensureAutomationToken(paths);
   const processLock = acquireServiceProcessLock(paths.root);
   const accountManager = new AccountManager({ paths });
   let server: Awaited<ReturnType<typeof startLocalHttpServer>> | undefined;
@@ -82,9 +85,14 @@ function parsePort(value: string | undefined): number {
 }
 
 async function run(): Promise<void> {
-  const command = parseServerCommand(process.argv.slice(2));
-  if (command === "help") {
+  const command = parseCliCommand(process.argv.slice(2));
+  if (command.name === "help") {
     console.log(serverHelpText());
+    return;
+  }
+  if (command.name !== "start") {
+    const paths = resolveStatePaths(process.env.CODEX_WEIXIN_STATE_DIR);
+    await runAutomationCli(command, paths, parsePort(process.env.CODEX_WEIXIN_PORT));
     return;
   }
   await main();

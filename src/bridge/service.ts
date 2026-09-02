@@ -3,7 +3,7 @@ import path from "node:path";
 import { AccessController } from "./access.js";
 import { parseActionBlocks } from "./actions.js";
 import { ApprovalBroker, type ApprovalResolution } from "./approval-broker.js";
-import { parseCommand } from "./commands.js";
+import { isPriorityCommandText, parseCommand } from "./commands.js";
 import { buildPrompt, buildPromptPreview, chunkText, parsePrompt } from "./format.js";
 import { PromptBuffer } from "./prompt-buffer.js";
 import type { CodexModelOption, CodexRuntimeInfo } from "../codex/app-server-runner.js";
@@ -27,11 +27,17 @@ export type BridgeServiceOptions = {
   onTurnStatus?: (status: { senderId: string; sessionId: string; active: boolean }) => void;
 };
 
+export type ProactiveTaskResult = {
+  sessionId: string;
+  delivery: "sent" | "queued";
+};
+
 export class BridgeService {
   private readonly access: AccessController;
   private readonly approvals = new ApprovalBroker();
   private readonly buffers: PromptBuffer;
   private readonly runner: HybridCodexRunner;
+  private readonly senderQueues = new Map<string, Promise<unknown>>();
 
   constructor(private readonly options: BridgeServiceOptions) {
     this.access = new AccessController({
@@ -63,6 +69,16 @@ export class BridgeService {
     this.options.stateStore.setPairedSenderIds(this.access.listPairedSenderIds());
     this.options.stateStore.ensureActiveSession(message.senderId, this.options.config.defaultCwd);
 
+    if (isPriorityCommandText(message.text)) {
+      await this.handleAuthorizedMessage(message);
+      return;
+    }
+    await this.enqueueSender(message.senderId, () => this.handleAuthorizedMessage(message));
+  }
+
+  private async handleAuthorizedMessage(message: NormalizedWeixinMessage): Promise<void> {
+    await this.flushPendingDeliveries(message.senderId);
+
     const command = parseCommand(message.text);
     if (command) {
       await this.handleCommand(message, command);
@@ -81,6 +97,40 @@ export class BridgeService {
     }
 
     await this.runCodexTurn(message, "", items);
+  }
+
+  async sendProactiveText(senderId: string, text: string, deliveryId?: string): Promise<"sent" | "queued"> {
+    const access = this.access.requireAccess(senderId);
+    if (!access.allowed) throw new Error("Automation recipient is not an authorized WeChat sender");
+    return this.enqueueSender(senderId, () => this.reply(senderId, text, deliveryId));
+  }
+
+  async runProactiveTask(input: {
+    senderId: string;
+    prompt: string;
+    workspace: string;
+    title?: string;
+  }): Promise<ProactiveTaskResult> {
+    const access = this.access.requireAccess(input.senderId);
+    if (!access.allowed) throw new Error("Automation recipient is not an authorized WeChat sender");
+    if (!isWorkspaceAllowed(input.workspace, this.options.config.allowedWorkspaces)) {
+      throw new Error(`Workspace is not allowed: ${input.workspace}`);
+    }
+    return this.enqueueSender(input.senderId, async () => {
+      const session = this.options.stateStore.createSession(
+        input.senderId,
+        input.workspace,
+        input.title ?? `主动任务 ${new Date().toLocaleString("zh-CN", { hour12: false })}`,
+        false
+      );
+      const delivery = await this.runCodexTurn(
+        { id: `automation:${session.id}`, senderId: input.senderId, text: input.prompt, attachments: [], raw: {} },
+        input.prompt,
+        [],
+        session
+      );
+      return { sessionId: session.id, delivery };
+    });
   }
 
   private async handleCommand(message: NormalizedWeixinMessage, command: { name: string; arg: string }): Promise<void> {
@@ -410,16 +460,22 @@ export class BridgeService {
     }
   }
 
-  private async runCodexTurn(message: NormalizedWeixinMessage, text: string, attachments: PromptBufferItem[] = []): Promise<void> {
-    const session = this.options.stateStore.ensureActiveSession(message.senderId, this.options.config.defaultCwd);
+  private async runCodexTurn(
+    message: NormalizedWeixinMessage,
+    text: string,
+    attachments: PromptBufferItem[] = [],
+    targetSession?: ManagedSession
+  ): Promise<"sent" | "queued"> {
+    const session = targetSession ?? this.options.stateStore.ensureActiveSession(message.senderId, this.options.config.defaultCwd);
     const promptPreview = buildPromptPreview(text, attachments);
     if (promptPreview) {
       this.options.stateStore.setSessionPromptPreview(session.id, promptPreview);
     }
-    const workspace = this.options.stateStore.getWorkspace(message.senderId) ?? this.options.config.defaultCwd;
-    const threadId = this.options.stateStore.getThread(message.senderId) || undefined;
+    const workspace = session.workspace;
+    const threadId = session.threadId || undefined;
     const progressEnabled = session.streamReplies ?? this.options.config.streamReplies;
     const sentProgress = new Set<string>();
+    let delivery: "sent" | "queued" = "sent";
     this.options.onTurnStatus?.({ senderId: message.senderId, sessionId: session.id, active: true });
     try {
       await this.withTyping(message.senderId, async () => {
@@ -437,19 +493,19 @@ export class BridgeService {
               const progressText = progress.trim();
               if (!progressText || sentProgress.has(progressText)) return;
               sentProgress.add(progressText);
-              await this.reply(message.senderId, `【进度】${progressText}`);
+              if (await this.reply(message.senderId, `【进度】${progressText}`) === "queued") delivery = "queued";
             }
           } : {})
         });
         console.log(`[codex-weixin] Codex turn completed for ${message.senderId}; text=${result.text.length} chars`);
         if (result.threadId) {
-          this.options.stateStore.setThread(message.senderId, result.threadId);
+          this.options.stateStore.setSessionThread(session.id, result.threadId);
         }
         const parsed = parseActionBlocks(result.text);
         const remaining = chunkText(parsed.visibleText);
         if (remaining.length) {
           for (const chunk of remaining) {
-            await this.reply(message.senderId, chunk);
+            if (await this.reply(message.senderId, chunk) === "queued") delivery = "queued";
           }
         }
         for (const action of parsed.actions.send) {
@@ -459,6 +515,7 @@ export class BridgeService {
     } finally {
       this.options.onTurnStatus?.({ senderId: message.senderId, sessionId: session.id, active: false });
     }
+    return delivery;
   }
 
   private async sendLocalMedia(senderId: string, action: { type: "image" | "file" | "video"; path: string }): Promise<void> {
@@ -544,19 +601,50 @@ export class BridgeService {
     };
   }
 
-  private async reply(senderId: string, text: string): Promise<void> {
+  private async reply(senderId: string, text: string, deliveryId?: string): Promise<"sent" | "queued"> {
     const contextToken = this.options.stateStore.getContextToken(senderId);
+    if (!contextToken) {
+      this.options.stateStore.enqueueDelivery(senderId, text, deliveryId);
+      console.warn(`WeChat context token is unavailable for ${senderId}; reply queued.`);
+      return "queued";
+    }
     try {
       console.log(`[codex-weixin] sending reply to ${senderId}; text=${text.length} chars`);
       await this.options.weixin.sendText({ toUserId: senderId, text, contextToken });
       console.log(`[codex-weixin] sent reply to ${senderId}`);
+      return "sent";
     } catch (error) {
       if (isStaleContextError(error)) {
-        console.warn(`WeChat context token is stale for ${senderId}; ask user to send a fresh message.`);
-        return;
+        this.options.stateStore.enqueueDelivery(senderId, text, deliveryId);
+        console.warn(`WeChat context token is stale for ${senderId}; reply queued until the user sends a fresh message.`);
+        return "queued";
       }
       throw error;
     }
+  }
+
+  private async flushPendingDeliveries(senderId: string): Promise<void> {
+    const contextToken = this.options.stateStore.getContextToken(senderId);
+    if (!contextToken) return;
+    for (const delivery of this.options.stateStore.listPendingDeliveries(senderId)) {
+      try {
+        await this.options.weixin.sendText({ toUserId: senderId, text: delivery.text, contextToken });
+        this.options.stateStore.removePendingDelivery(delivery.id);
+      } catch (error) {
+        if (isStaleContextError(error)) return;
+        throw error;
+      }
+    }
+  }
+
+  private enqueueSender<T>(senderId: string, run: () => Promise<T>): Promise<T> {
+    const previous = this.senderQueues.get(senderId) ?? Promise.resolve();
+    const task = previous.catch(() => undefined).then(run);
+    this.senderQueues.set(senderId, task);
+    void task.finally(() => {
+      if (this.senderQueues.get(senderId) === task) this.senderQueues.delete(senderId);
+    }).catch(() => undefined);
+    return task;
   }
 
   allowSender(senderId: string): void {

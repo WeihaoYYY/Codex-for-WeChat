@@ -209,7 +209,7 @@ export class RuntimeStateStore {
     return this.createSession(senderId, workspace);
   }
 
-  createSession(senderId: string, workspace: string, title?: string): ManagedSession {
+  createSession(senderId: string, workspace: string, title?: string, activate = true): ManagedSession {
     const now = new Date().toISOString();
     const number = this.state.sessions.filter((session) => session.senderId === senderId).length + 1;
     const session: ManagedSession = {
@@ -221,9 +221,36 @@ export class RuntimeStateStore {
       updatedAt: now
     };
     this.state.sessions.push(session);
-    this.state.activeSessionIds[senderId] = session.id;
+    if (activate) {
+      this.state.activeSessionIds[senderId] = session.id;
+    }
     this.save();
     return structuredClone(session);
+  }
+
+  enqueueDelivery(senderId: string, text: string, id: string = crypto.randomUUID()): string {
+    const existing = this.state.pendingDeliveries.find((delivery) => delivery.id === id);
+    if (existing) return existing.id;
+    this.state.pendingDeliveries.push({
+      id,
+      senderId,
+      text,
+      createdAt: new Date().toISOString()
+    });
+    this.state.pendingDeliveries = this.state.pendingDeliveries.slice(-200);
+    this.save();
+    return id;
+  }
+
+  listPendingDeliveries(senderId?: string): RuntimeState["pendingDeliveries"] {
+    return structuredClone(this.state.pendingDeliveries
+      .filter((delivery) => !senderId || delivery.senderId === senderId));
+  }
+
+  removePendingDelivery(id: string): void {
+    const before = this.state.pendingDeliveries.length;
+    this.state.pendingDeliveries = this.state.pendingDeliveries.filter((delivery) => delivery.id !== id);
+    if (this.state.pendingDeliveries.length !== before) this.save();
   }
 
   setSessionPromptPreview(sessionId: string, preview: string): ManagedSession {

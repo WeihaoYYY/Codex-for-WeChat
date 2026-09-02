@@ -1,16 +1,16 @@
 {
   "name": "codex-weixin",
   "version": "0.3.8",
-  "description": "CodeX From WeChat: a local WeChat bridge with approvals and controlled browser tasks for OpenAI Codex.",
+  "description": "Codex for WeChat: a local WeChat bridge with approvals, proactive tasks, and controlled browser work for OpenAI Codex.",
   "license": "MIT",
   "author": "Xuechao Zou",
-  "homepage": "https://github.com/WeihaoYYY/codex-from-wechat#readme",
+  "homepage": "https://github.com/WeihaoYYY/Codex-for-WeChat#readme",
   "bugs": {
-    "url": "https://github.com/WeihaoYYY/codex-from-wechat/issues"
+    "url": "https://github.com/WeihaoYYY/Codex-for-WeChat/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/WeihaoYYY/codex-from-wechat.git"
+    "url": "git+https://github.com/WeihaoYYY/Codex-for-WeChat.git"
   },
   "keywords": [
     "codex",

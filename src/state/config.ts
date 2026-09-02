@@ -28,6 +28,9 @@ export type CodexWeixinConfig = {
   browserExecutablePath?: string;
   browserHeadless: boolean;
   browserAllowedDomains: string[];
+  automationEnabled: boolean;
+  automationAccountId?: string;
+  automationSenderId?: string;
 };
 
 export function defaultConfig(cwd = path.join(os.homedir(), ".codex-weixin")): CodexWeixinConfig {
@@ -45,7 +48,8 @@ export function defaultConfig(cwd = path.join(os.homedir(), ".codex-weixin")): C
     browserProfileDir: defaultBrowserProfileDir(),
     browserOutputDir: path.join(os.homedir(), ".codex-weixin", "browser-output"),
     browserHeadless: false,
-    browserAllowedDomains: []
+    browserAllowedDomains: [],
+    automationEnabled: false
   };
 }
 
@@ -65,10 +69,17 @@ export function loadConfig(paths: StatePaths, cwd?: string): CodexWeixinConfig {
     browserExecutablePath: loaded.browserExecutablePath?.trim() ? path.resolve(loaded.browserExecutablePath) : undefined,
     browserHeadless: loaded.browserHeadless === true,
     browserAllowedDomains: normalizeDomains(loaded.browserAllowedDomains),
+    automationEnabled: loaded.automationEnabled === true,
+    automationAccountId: cleanOptional(loaded.automationAccountId),
+    automationSenderId: cleanOptional(loaded.automationSenderId),
     allowedSenderIds: loaded.allowedSenderIds ?? base.allowedSenderIds,
     allowedWorkspaces: (loaded.allowedWorkspaces?.length ? loaded.allowedWorkspaces : base.allowedWorkspaces)
       .map((workspace) => path.resolve(workspace))
   };
+}
+
+function cleanOptional(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeDomains(value: unknown): string[] {

@@ -286,6 +286,22 @@ export class AccountManager {
     return addProviderModelFamily(models, runtime.provider);
   }
 
+  async sendAutomationText(accountId: string, senderId: string, text: string, deliveryId?: string): Promise<"sent" | "queued"> {
+    const service = this.runningService(accountId);
+    return service.sendProactiveText(senderId, text, deliveryId);
+  }
+
+  async runAutomationTask(input: {
+    accountId: string;
+    senderId: string;
+    prompt: string;
+    workspace: string;
+    title?: string;
+  }): Promise<{ sessionId: string; delivery: "sent" | "queued" }> {
+    const service = this.runningService(input.accountId);
+    return service.runProactiveTask(input);
+  }
+
   createSession(accountId: string, senderId: string, workspace?: string, title?: string): AccountSession {
     const config = this.configProvider();
     const targetWorkspace = workspace ?? config.defaultCwd;
@@ -480,6 +496,15 @@ export class AccountManager {
     const account = loadAccount(this.options.paths, accountId);
     return this.entries.get(account.accountId)?.store
       ?? new RuntimeStateStore(accountStatePaths(this.options.paths, account.accountId));
+  }
+
+  private runningService(accountId: string): BridgeService {
+    const account = loadAccount(this.options.paths, accountId);
+    const entry = this.entries.get(account.accountId);
+    if (entry?.status !== "running" || !entry.service) {
+      throw new Error("Configured automation account is not running");
+    }
+    return entry.service;
   }
 
   private isActive(accountId: string, sessionId: string): boolean {

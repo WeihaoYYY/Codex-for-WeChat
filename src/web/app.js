@@ -483,6 +483,8 @@ function renderSettings() {
   document.querySelector("#backendInput").value = state.config.codexBackend || "auto";
   document.querySelector("#sandboxInput").value = state.config.codexExecSandbox || "";
   document.querySelector("#streamRepliesInput").checked = Boolean(state.config.streamReplies);
+  document.querySelector("#automationEnabledInput").checked = Boolean(state.config.automationEnabled);
+  renderAutomationTargets();
   document.querySelector("#browserEnabledInput").checked = Boolean(state.config.browserEnabled);
   document.querySelector("#browserHeadlessInput").checked = Boolean(state.config.browserHeadless);
   document.querySelector("#browserExecutablePathInput").value = state.config.browserExecutablePath || "";
@@ -492,6 +494,22 @@ function renderSettings() {
   renderModelOptions();
   document.querySelector("#effectiveModelValue").textContent = state.codexRuntime?.model || state.config.model || "Codex 默认";
   document.querySelector("#effectiveEffortValue").textContent = state.codexRuntime?.effort || state.config.effort || "Codex 默认";
+}
+
+function renderAutomationTargets() {
+  const select = document.querySelector("#automationTargetInput");
+  const configured = state.config?.automationAccountId && state.config?.automationSenderId
+    ? `${state.config.automationAccountId}\n${state.config.automationSenderId}`
+    : "";
+  const targets = state.accounts.flatMap((account) => (account.pairedSenderIds || []).map((senderId) => ({
+    value: `${account.accountId}\n${senderId}`,
+    label: `${account.displayName || "微信账号"} · 已授权联系人 ${senderId.slice(0, 6)}…`
+  })));
+  select.innerHTML = [
+    '<option value="">请选择已授权联系人</option>',
+    ...targets.map((target) => `<option value="${escapeAttr(target.value)}">${escapeHtml(target.label)}</option>`)
+  ].join("");
+  select.value = configured;
 }
 
 function renderModelOptions() {
@@ -1284,6 +1302,7 @@ async function saveSettings(event) {
   const button = event.submitter;
   try {
     button.disabled = true;
+    const [automationAccountId, automationSenderId] = document.querySelector("#automationTargetInput").value.split("\n");
     const result = await api("/api/config", {
       method: "PUT",
       body: {
@@ -1294,6 +1313,9 @@ async function saveSettings(event) {
         model: document.querySelector("#modelInput").value.trim(),
         effort: document.querySelector("#effortInput").value.trim(),
         streamReplies: document.querySelector("#streamRepliesInput").checked,
+        automationEnabled: document.querySelector("#automationEnabledInput").checked,
+        automationAccountId: automationAccountId || null,
+        automationSenderId: automationSenderId || null,
         browserEnabled: document.querySelector("#browserEnabledInput").checked,
         browserHeadless: document.querySelector("#browserHeadlessInput").checked,
         browserExecutablePath: document.querySelector("#browserExecutablePathInput").value.trim() || null,

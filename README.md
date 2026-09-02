@@ -1,7 +1,7 @@
-<h1 align="center">CodeX From WeChat</h1>
+<h1 align="center">Codex for WeChat</h1>
 
 <p align="center">
-  <img src="src/web/favicon.svg" alt="CodeX From WeChat logo" width="128" height="128" />
+  <img src="src/web/favicon.svg" alt="Codex for WeChat logo" width="128" height="128" />
 </p>
 
 <p align="center">
@@ -12,10 +12,10 @@
   <strong>从个人微信向本机 Codex 下达文件、命令和受控网页任务。</strong>
 </p>
 
-**CodeX From WeChat** 是基于 [`XavierJiezou/codex-weixin`](https://github.com/XavierJiezou/codex-weixin) `v0.3.8` 的增强分支。它在原有微信聊天、文件传输和会话管理基础上，加入微信内审批、长任务即时停止，以及使用独立浏览器 profile 的受控网页操作。
+**Codex for WeChat** 是基于 [`XavierJiezou/codex-weixin`](https://github.com/XavierJiezou/codex-weixin) `v0.3.8` 的增强分支。它在原有微信聊天、文件传输和会话管理基础上，加入微信内审批、长任务即时停止、主动任务通知，以及使用独立浏览器 profile 的受控网页操作。
 
 ```text
-个人微信 <-> CodeX From WeChat <-> Codex App Server <-> 允许的工作目录 / 独立浏览器
+个人微信 <-> Codex for WeChat <-> Codex App Server <-> 允许的工作目录 / 独立浏览器
 ```
 
 项目只在本机监听 `127.0.0.1`，不是通用消息网关，也不会把管理页面开放到局域网或公网。
@@ -24,7 +24,7 @@
 > 这是第三方开源项目，不是 OpenAI 或微信官方集成。请只授权自己的微信联系人和明确的工作目录；不要提交或分享状态目录、微信 token、Codex 登录凭据或浏览器 profile。
 
 > [!NOTE]
-> 内部 npm 包名和可执行命令暂时仍是 `codex-weixin`，以保持与上游兼容；仓库和产品名称为 **CodeX From WeChat**。
+> 内部 npm 包名和可执行命令暂时仍是 `codex-weixin`，以保持与上游兼容；仓库和产品名称为 **Codex for WeChat**。
 
 ## 核心功能
 
@@ -90,6 +90,10 @@ Web 端可以配置工作目录、Codex 后端、模型、推理强度和过程�
 
 浏览器工具只会挂载到启用功能后新建的 Codex thread。保存设置或升级后，请先在微信发送 `/new`，再发送浏览器任务。独立浏览器不会读取日常 Chrome 配置；第一次使用需要在弹出的浏览器中自行登录目标网站。
 
+### 9. ChatGPT / Codex 主动任务与微信通知
+
+设置唯一接收人后，本机的 ChatGPT 计划任务、脚本或 Codex `notify` 可以主动向微信发消息，也可以创建一个独立 Codex 会话执行任务并把进度和结果发回微信。主动任务不会切换微信当前会话，避免和桌面端同一个 thread 发生写入冲突。
+
 ## 环境要求
 
 - Node.js `>=22`
@@ -107,11 +111,12 @@ codex
 这个增强分支尚未发布到 npm。请从本仓库源码安装；运行 `npm install -g codex-weixin` 得到的是上游官方版，不包含微信审批和浏览器工具。
 
 ```powershell
-git clone https://github.com/WeihaoYYY/codex-from-wechat.git
-Set-Location "codex-from-wechat"
+git clone https://github.com/WeihaoYYY/Codex-for-WeChat.git
+Set-Location "Codex-for-WeChat"
 npm ci
 npm run typecheck
 npm run build
+npm link
 npm start
 ```
 
@@ -119,7 +124,7 @@ npm start
 
 ```powershell
 $env:CODEX_WEIXIN_PORT="18787"
-$env:CODEX_WEIXIN_STATE_DIR="C:\Codex\codex-from-wechat-state"
+$env:CODEX_WEIXIN_STATE_DIR="C:\Codex\codex-for-wechat-state"
 $env:CODEX_WEIXIN_OPEN="0"
 npm start
 ```
@@ -136,7 +141,7 @@ codex-weixin
 以后更新源码版：
 
 ```powershell
-Set-Location "codex-from-wechat"
+Set-Location "Codex-for-WeChat"
 git pull --ff-only
 npm ci
 npm run build
@@ -243,6 +248,53 @@ Codex 可以在最终回复中声明需要发送的本机文件：
 
 启用浏览器控制时，后端固定使用 app-server，避免回退到不支持动态浏览器工具的 `codex exec`。已有 thread 不会被事后注入工具；请发送 `/new` 创建新会话。
 
+## 主动任务与 ChatGPT / Codex 自动化
+
+先在管理页打开“设置 → 主动任务与通知”，开启本机主动调用，并选择**唯一一个**已授权微信联系人。服务会在私有状态目录生成 `automation-token`；密钥不会显示在网页、日志或 API 返回值中。
+
+主动发一条通知：
+
+```powershell
+codex-weixin push --text "数据更新完成" --idempotency-key "daily-data-2026-09-02"
+```
+
+创建独立 Codex 任务，并在微信接收过程和结果：
+
+```powershell
+codex-weixin task `
+  --prompt "检查 E:\Project 的测试结果并给出摘要" `
+  --cwd "E:\Project" `
+  --title "每日测试" `
+  --idempotency-key "daily-tests-2026-09-02"
+```
+
+加上 `--wait` 时，调用方会等待任务完成；不加时会立即返回任务编号，服务在后台继续执行。工作目录必须位于“允许的工作目录”内。相同类型和相同 `idempotency-key` 只执行一次；服务同时限制为每分钟 30 次调用和最多 20 个活动任务。
+
+如果没有通过 `npm link` 安装命令，也可以直接调用构建入口：
+
+```powershell
+node "E:\Codex\Codex-for-WeChat\dist\server\index.js" push --text "测试通知"
+```
+
+端口和状态目录必须和正在运行的服务一致：
+
+```powershell
+$env:CODEX_WEIXIN_PORT="8787"
+$env:CODEX_WEIXIN_STATE_DIR="C:\Codex\codex-for-wechat-state"
+```
+
+要把普通 Codex turn 完成结果主动转发到微信，可在 `~/.codex/config.toml` 配置官方 `notify` 钩子：
+
+```toml
+notify = ["node", "E:\\Codex\\Codex-for-WeChat\\dist\\server\\index.js", "notify"]
+```
+
+Codex 会把 `agent-turn-complete` JSON 作为最后一个参数传入；本项目只转发最终回复，并用 thread/turn ID 去重。这个配置是可选的，不会由安装程序自动修改。
+
+ChatGPT 桌面端计划任务也可以运行上面的 `task` 命令。执行本地项目时，电脑必须开机、Codex/ChatGPT 桌面应用与 Codex for WeChat 服务必须运行；网页版计划任务不能直接访问电脑本地目录。参见 [OpenAI 计划任务文档](https://learn.chatgpt.com/zh-Hans/docs/automations) 和 [Codex `notify` 配置](https://learn.chatgpt.com/zh-Hans/docs/config-file/config-advanced)。
+
+当微信上下文凭证过期时，文本结果不会丢失，而是保存在本机待发送队列。你下一次从该微信联系人发来消息后，服务会先刷新凭证并补送积压内容。主动任务的高风险命令和浏览器提交仍会在微信生成 `A1` 形式的一次性审批。
+
 ## 模型和推理强度
 
 “设置”页面会从 Codex app-server 读取可用模型和各模型支持的推理强度。选择“沿用 Codex 设置”时使用 Codex 自身配置；选择具体模型或推理强度并保存后，后续 Web 和微信消息都会使用该配置。
@@ -264,6 +316,8 @@ IkunCoding 提供方会额外显示 `gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6
   browser-profile/          与日常浏览器隔离的持久登录配置
   browser-output/           浏览器截图等本机输出
   config.json               Codex 和工作区配置
+  automation-token          本机主动调用密钥（不要分享）
+  automation-jobs.json      主动任务状态、去重键和简短提示预览
   logs/
 ```
 
@@ -290,6 +344,7 @@ codex-weixin
 
 - Web 服务只监听本机，拒绝非本机 Host 和 Origin。
 - 所有修改 API 都需要页面运行时临时令牌。
+- 主动任务 API 使用单独的持久本机密钥，只接受 `127.0.0.1` 请求，并且只允许配置中的唯一接收人。
 - 微信凭据永远不返回管理页面。
 - 未知联系人默认拒绝，必须在管理页明确允许。
 - `/bind` 只能选择允许列表内的绝对工作目录。
@@ -317,7 +372,7 @@ npm run build
 
 项目是独立实现，微信 iLink 接入形态参考 `Tencent/openclaw-weixin`，并参考了公开的 Codex/微信桥接项目在 Codex app-server、媒体传输和安全边界方面的实践。项目未复制 AGPL 项目源码，使用 MIT License。
 
-- 本增强版源码：[WeihaoYYY/codex-from-wechat](https://github.com/WeihaoYYY/codex-from-wechat)
+- 本增强版源码：[WeihaoYYY/Codex-for-WeChat](https://github.com/WeihaoYYY/Codex-for-WeChat)
 - 上游项目：[XavierJiezou/codex-weixin](https://github.com/XavierJiezou/codex-weixin)
 - Codex CLI 文档：[OpenAI Codex CLI](https://learn.chatgpt.com/zh-Hans/docs/codex/cli)
 - Codex 登录说明：[OpenAI Authentication](https://learn.chatgpt.com/zh-Hans/docs/auth)
