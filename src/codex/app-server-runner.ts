@@ -16,6 +16,58 @@ export type CodexRunnerInput = {
   effort?: string;
   onDelta?: (delta: string) => Promise<void> | void;
   onProgress?: (message: string) => Promise<void> | void;
+  onApproval?: (request: CodexApprovalRequest) => Promise<CodexApprovalDecision>;
+  dynamicTools?: DynamicToolSpec[];
+  onDynamicToolCall?: (request: DynamicToolCallRequest) => Promise<DynamicToolCallResult>;
+  sessionKey?: string;
+};
+
+export type CodexApprovalDecision = "accept" | "acceptForSession" | "decline" | "cancel";
+
+export type CodexApprovalRequest = {
+  kind: "command" | "fileChange" | "browserNavigation" | "browserAction" | "browserUpload";
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  title: string;
+  detail: string;
+  allowForSession?: boolean;
+};
+
+export type DynamicToolSpec = {
+  type: "function";
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  deferLoading?: boolean;
+} | {
+  type: "namespace";
+  name: string;
+  description: string;
+  tools: Array<{
+    type: "function";
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    deferLoading?: boolean;
+  }>;
+};
+
+export type DynamicToolCallRequest = {
+  threadId: string;
+  turnId: string;
+  callId: string;
+  namespace?: string;
+  tool: string;
+  arguments: unknown;
+};
+
+export type DynamicToolCallResult = {
+  success: boolean;
+  contentItems: Array<
+    | { type: "inputText"; text: string }
+    | { type: "inputImage"; imageUrl: string }
+  >;
 };
 
 export type CodexHistoryMessage = {
@@ -72,6 +124,11 @@ type TurnStream = {
   chain: Promise<void>;
 };
 
+type TurnHandlers = {
+  onApproval?: CodexRunnerInput["onApproval"];
+  onDynamicToolCall?: CodexRunnerInput["onDynamicToolCall"];
+};
+
 type QueuedTurnEvent = {
   type: "delta" | "progress";
   text: string;
@@ -106,6 +163,8 @@ export class AppServerCodexRunner {
   private readonly turnStreams = new Map<string, TurnStream>();
   private readonly queuedTurnEvents = new Map<string, QueuedTurnEvent[]>();
   private readonly itemPhasesByTurn = new Map<string, Map<string, string>>();
+  private readonly itemDetailsByTurn = new Map<string, Map<string, string>>();
+  private readonly turnHandlersByThread = new Map<string, TurnHandlers>();
   private readonly runtimeInfoByThread = new Map<string, CodexRuntimeInfo>();
   private modelOptions?: CodexModelOption[];
 
@@ -120,7 +179,8 @@ export class AppServerCodexRunner {
         ...(input.threadId ? { threadId: input.threadId } : {}),
         cwd: input.cwd,
         model: input.model,
-        approvalPolicy: "never"
+        approvalPolicy: input.onApproval ? "on-request" : "never",
+        ...(!input.threadId && input.dynamicTools?.length ? { dynamicTools: input.dynamicTools } : {})
       })
     ) as Record<string, unknown>;
     const thread = threadResponse.thread as Record<string, unknown> | undefined;
@@ -130,14 +190,24 @@ export class AppServerCodexRunner {
     }
     this.runtimeInfoByThread.set(threadId, runtimeInfoFromThreadResponse(threadResponse));
 
-    const turnResponse = await this.request("turn/start", compactObject({
-      threadId,
-      input: [{ type: "text", text: input.prompt, text_elements: [] }],
-      cwd: input.cwd,
-      approvalPolicy: "never",
-      model: input.model,
-      effort: input.effort
-    })) as Record<string, unknown>;
+    this.turnHandlersByThread.set(threadId, {
+      onApproval: input.onApproval,
+      onDynamicToolCall: input.onDynamicToolCall
+    });
+    let turnResponse: Record<string, unknown>;
+    try {
+      turnResponse = await this.request("turn/start", compactObject({
+        threadId,
+        input: [{ type: "text", text: input.prompt, text_elements: [] }],
+        cwd: input.cwd,
+        approvalPolicy: input.onApproval ? "on-request" : "never",
+        model: input.model,
+        effort: input.effort
+      })) as Record<string, unknown>;
+    } catch (error) {
+      this.turnHandlersByThread.delete(threadId);
+      throw error;
+    }
     const turn = turnResponse.turn as Record<string, unknown> | undefined;
     const turnId = typeof turn?.id === "string" ? turn.id : undefined;
     if (!turnId) {
@@ -157,7 +227,11 @@ export class AppServerCodexRunner {
       }
       this.queuedTurnEvents.delete(key);
     }
-    return this.waitForTurn(threadId, turnId);
+    try {
+      return await this.waitForTurn(threadId, turnId);
+    } finally {
+      this.turnHandlersByThread.delete(threadId);
+    }
   }
 
   async listSessions(): Promise<unknown> {
@@ -289,7 +363,7 @@ export class AppServerCodexRunner {
           version: "0.2.0"
         },
         capabilities: {
-          experimentalApi: false,
+          experimentalApi: true,
           requestAttestation: false
         }
       }, Math.min(this.options.requestTimeoutMs ?? 600_000, 15_000));
@@ -379,6 +453,14 @@ export class AppServerCodexRunner {
         const phases = this.itemPhasesByTurn.get(key) ?? new Map<string, string>();
         phases.set(itemId, item.phase);
         this.itemPhasesByTurn.set(key, phases);
+      }
+      if (key && itemId) {
+        const detail = itemDetail(item);
+        if (detail) {
+          const details = this.itemDetailsByTurn.get(key) ?? new Map<string, string>();
+          details.set(itemId, detail);
+          this.itemDetailsByTurn.set(key, details);
+        }
       }
       return;
     }
@@ -490,6 +572,7 @@ export class AppServerCodexRunner {
     this.turnTexts.delete(key);
     this.queuedTurnEvents.delete(key);
     this.itemPhasesByTurn.delete(key);
+    this.itemDetailsByTurn.delete(key);
     if (completion.status === "completed") {
       resolve({ text: completion.text, threadId, raw: completion.raw });
       return;
@@ -527,12 +610,66 @@ export class AppServerCodexRunner {
   }
 
   private handleServerRequest(message: WireMessage): void {
+    void this.respondToServerRequest(message).catch((error) => {
+      try {
+        this.send({
+          id: message.id,
+          error: { code: -32603, message: error instanceof Error ? error.message : String(error) }
+        });
+      } catch {
+        // The transport failure path will reject the active turn.
+      }
+    });
+  }
+
+  private async respondToServerRequest(message: WireMessage): Promise<void> {
     const id = message.id as JsonRpcId;
+    const params = message.params ?? {};
+    const threadId = typeof params.threadId === "string" ? params.threadId : undefined;
+    const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
+    const itemId = typeof params.itemId === "string"
+      ? params.itemId
+      : typeof params.callId === "string" ? params.callId : undefined;
+    const handlers = threadId ? this.turnHandlersByThread.get(threadId) : undefined;
     switch (message.method) {
-      case "item/commandExecution/requestApproval":
-      case "item/fileChange/requestApproval":
-        this.send({ id, result: { decision: "decline" } });
+      case "item/commandExecution/requestApproval": {
+        if (!handlers?.onApproval || !threadId || !turnId || !itemId) {
+          this.send({ id, result: { decision: "decline" } });
+          return;
+        }
+        const detail = commandApprovalDetail(params, this.itemDetailsByTurn.get(turnKey(threadId, turnId))?.get(itemId));
+        const decision = await handlers.onApproval({
+          kind: "command",
+          threadId,
+          turnId,
+          itemId,
+          title: typeof params.networkApprovalContext === "object" && params.networkApprovalContext
+            ? "允许此网络访问"
+            : "允许运行本机命令",
+          detail,
+          allowForSession: true
+        });
+        this.send({ id, result: { decision } });
         return;
+      }
+      case "item/fileChange/requestApproval": {
+        if (!handlers?.onApproval || !threadId || !turnId || !itemId) {
+          this.send({ id, result: { decision: "decline" } });
+          return;
+        }
+        const detail = fileApprovalDetail(params, this.itemDetailsByTurn.get(turnKey(threadId, turnId))?.get(itemId));
+        const decision = await handlers.onApproval({
+          kind: "fileChange",
+          threadId,
+          turnId,
+          itemId,
+          title: "允许此文件更改",
+          detail,
+          allowForSession: true
+        });
+        this.send({ id, result: { decision } });
+        return;
+      }
       case "execCommandApproval":
       case "applyPatchApproval":
         this.send({ id, result: { decision: "denied" } });
@@ -546,15 +683,28 @@ export class AppServerCodexRunner {
       case "item/permissions/requestApproval":
         this.send({ id, result: { permissions: {}, scope: "turn" } });
         return;
-      case "item/tool/call":
-        this.send({
-          id,
-          result: {
-            contentItems: [{ type: "inputText", text: "Dynamic tools are not available in codex-weixin." }],
-            success: false
-          }
+      case "item/tool/call": {
+        if (!handlers?.onDynamicToolCall || !threadId || !turnId || !itemId || typeof params.tool !== "string") {
+          this.send({
+            id,
+            result: {
+              contentItems: [{ type: "inputText", text: "Dynamic tools are not available for this codex-weixin turn." }],
+              success: false
+            }
+          });
+          return;
+        }
+        const result = await handlers.onDynamicToolCall({
+          threadId,
+          turnId,
+          callId: itemId,
+          namespace: typeof params.namespace === "string" ? params.namespace : undefined,
+          tool: params.tool,
+          arguments: params.arguments
         });
+        this.send({ id, result });
         return;
+      }
       case "currentTime/read":
         this.send({ id, result: { currentTimeAt: Math.floor(Date.now() / 1_000) } });
         return;
@@ -599,6 +749,8 @@ export class AppServerCodexRunner {
     this.turnStreams.clear();
     this.queuedTurnEvents.clear();
     this.itemPhasesByTurn.clear();
+    this.itemDetailsByTurn.clear();
+    this.turnHandlersByThread.clear();
     this.runtimeInfoByThread.clear();
     this.modelOptions = undefined;
   }
@@ -608,6 +760,56 @@ function turnKeyFromParams(params: Record<string, unknown>): string | undefined 
   const threadId = typeof params.threadId === "string" ? params.threadId : undefined;
   const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
   return threadId && turnId ? turnKey(threadId, turnId) : undefined;
+}
+
+function itemDetail(item: Record<string, unknown> | undefined): string | undefined {
+  if (!item) return undefined;
+  if (item.type === "commandExecution") {
+    const command = typeof item.command === "string" ? item.command : "";
+    const cwd = typeof item.cwd === "string" ? item.cwd : "";
+    return [command && `命令：${command}`, cwd && `目录：${cwd}`].filter(Boolean).join("\n") || undefined;
+  }
+  if (item.type === "fileChange" && Array.isArray(item.changes)) {
+    const changes = item.changes.slice(0, 12).map((raw) => {
+      const change = raw as Record<string, unknown>;
+      const path = typeof change.path === "string" ? change.path : "未知路径";
+      const kind = typeof change.kind === "string" ? change.kind : "change";
+      const diff = typeof change.diff === "string" ? truncate(change.diff, 1_200) : "";
+      return `${kind}: ${path}${diff ? `\n${diff}` : ""}`;
+    });
+    return truncate(changes.join("\n\n"), 4_000) || undefined;
+  }
+  return undefined;
+}
+
+function commandApprovalDetail(params: Record<string, unknown>, itemDetailText?: string): string {
+  const command = typeof params.command === "string" ? params.command : undefined;
+  const cwd = typeof params.cwd === "string" ? params.cwd : undefined;
+  const reason = typeof params.reason === "string" ? params.reason : undefined;
+  const network = params.networkApprovalContext as Record<string, unknown> | undefined;
+  const host = typeof network?.host === "string" ? network.host : undefined;
+  const protocol = typeof network?.protocol === "string" ? network.protocol : undefined;
+  return truncate([
+    reason && `原因：${reason}`,
+    command && `命令：${command}`,
+    cwd && `目录：${cwd}`,
+    host && `网络目标：${protocol ? `${protocol}://` : ""}${host}`,
+    !command && itemDetailText
+  ].filter(Boolean).join("\n"), 4_000);
+}
+
+function fileApprovalDetail(params: Record<string, unknown>, itemDetailText?: string): string {
+  const reason = typeof params.reason === "string" ? params.reason : undefined;
+  const grantRoot = typeof params.grantRoot === "string" ? params.grantRoot : undefined;
+  return truncate([
+    reason && `原因：${reason}`,
+    grantRoot && `请求写入范围：${grantRoot}`,
+    itemDetailText ?? "Codex 请求执行文件更改；上游未提供可显示的 diff。"
+  ].filter(Boolean).join("\n"), 4_000);
+}
+
+function truncate(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max - 16)}\n…（内容已截断）`;
 }
 
 function parseModelOption(value: unknown): CodexModelOption | undefined {

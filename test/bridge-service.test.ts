@@ -13,6 +13,106 @@ import { RuntimeStateStore } from "../src/state/runtime-state.js";
 import { encryptAesEcb } from "../src/weixin/media.js";
 import { normalizeWeixinMessage } from "../src/weixin/messages.js";
 
+test("treats the exact Chinese stop message as a Codex interrupt command", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-stop-command-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateStore = new RuntimeStateStore(resolveStatePaths(path.join(tmpDir, "state")));
+  stateStore.ensureActiveSession("alice@im.wechat", tmpDir);
+  stateStore.setThread("alice@im.wechat", "thread-active");
+  const stoppedThreads: Array<string | undefined> = [];
+  const replies: string[] = [];
+  const service = new BridgeService({
+    config: {
+      ...defaultConfig(tmpDir),
+      allowedSenderIds: ["alice@im.wechat"]
+    },
+    stateStore,
+    weixin: {
+      async sendText(input: { text: string }) {
+        replies.push(input.text);
+        return { messageId: "text-message" };
+      }
+    } as never,
+    runner: {
+      async run() {
+        throw new Error("stop alias must not start another Codex turn");
+      },
+      async stop(threadId?: string) {
+        stoppedThreads.push(threadId);
+      }
+    } as never
+  });
+
+  await service.handleMessage({
+    id: "stop",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "停止",
+    raw: {}
+  });
+
+  assert.deepEqual(stoppedThreads, ["thread-active"]);
+  assert.deepEqual(replies, ["Stop signal sent."]);
+});
+
+test("continues a Codex turn after the same WeChat sender approves a pending action", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-approval-command-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateStore = new RuntimeStateStore(resolveStatePaths(path.join(tmpDir, "state")));
+  const replies: string[] = [];
+  let approvalRequested!: () => void;
+  const requested = new Promise<void>((resolve) => {
+    approvalRequested = resolve;
+  });
+  const service = new BridgeService({
+    config: { ...defaultConfig(tmpDir), allowedSenderIds: ["alice@im.wechat"] },
+    stateStore,
+    weixin: {
+      async sendText(input: { text: string }) {
+        replies.push(input.text);
+        if (input.text.includes("【需要确认 A1】")) approvalRequested();
+        return { messageId: "text-message" };
+      }
+    } as never,
+    runner: {
+      async run(input: { onApproval?: (request: never) => Promise<string> }) {
+        const decision = await input.onApproval?.({
+          kind: "command",
+          threadId: "thread-approval",
+          turnId: "turn-approval",
+          itemId: "item-approval",
+          title: "允许运行本机命令",
+          detail: "命令：npm test",
+          allowForSession: true
+        } as never);
+        return { raw: "", text: `decision:${decision}`, threadId: "thread-approval" };
+      },
+      async stop() {}
+    } as never
+  });
+
+  const turn = service.handleMessage({
+    id: "turn",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "run the tests",
+    raw: {}
+  });
+  await requested;
+  await service.handleMessage({
+    id: "approve",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "/approve A1",
+    raw: {}
+  });
+  await turn;
+
+  assert.equal(replies.some((reply) => reply.includes("批准一次：/approve A1")), true);
+  assert.equal(replies.some((reply) => reply.includes("已批准 A1")), true);
+  assert.equal(replies.includes("decision:accept"), true);
+});
+
 test("reports WeChat Codex turn status and resolves runtime details for status", async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-status-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));

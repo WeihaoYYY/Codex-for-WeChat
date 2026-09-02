@@ -2,6 +2,33 @@
 
 All notable changes to `codex-weixin` are documented in this file.
 
+## [Unreleased] - CodeX From WeChat
+
+### Added
+
+- Added sender-bound, one-time WeChat approval codes for Codex command execution, file changes, new browser domains, uploads, and consequential browser actions.
+- Added `/approve`, `/approve-session`, and `/deny`, with ten-minute expiry and protection against using a browser approval as a session-wide authorization.
+- Added controlled Chrome/Edge tasks through an isolated persistent profile, including page inspection, form filling, screenshots, allowed-workspace uploads, and public-HTTP(S)-only navigation.
+- Added browser settings to the local management page, including profile, output, executable, headless, and pre-approved-domain configuration.
+
+### Changed
+
+- Made `/stop` interrupt the active Codex turn immediately and cancel pending approvals for the same sender.
+- Attached browser tools only to newly created Codex threads and required app-server while browser control is enabled.
+- Renamed the distribution and repository to **CodeX From WeChat** while retaining the `codex-weixin` npm package and executable names for compatibility.
+
+### Security
+
+- Bound approval codes to the originating WeChat account and sender, made them single-use, and rejected expired or cross-sender replies.
+- Blocked localhost, private-network, and non-HTTP(S) browser targets, including private subresources and redirects.
+- Kept browser cookies in an isolated local profile and limited file uploads to configured workspace roots.
+
+### Verification
+
+- TypeScript type-check and production build pass.
+- The approval, bridge, app-server, browser-controller, and WeChat-monitor tests pass (`31/31`).
+- The complete upstream suite passes `145/148` on Windows; the remaining three pre-existing failures exercise macOS/Homebrew path and source auto-install fixtures.
+
 ## [0.3.8] - 2026-07-20
 
 ### Fixed

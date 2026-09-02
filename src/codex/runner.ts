@@ -7,6 +7,7 @@ import {
 } from "./app-server-runner.js";
 import { CodexExecRunner, type CodexRunResult } from "./exec-runner.js";
 import type { CodexExecSandbox } from "./sandbox.js";
+import { BrowserController, BROWSER_DYNAMIC_TOOLS, type BrowserControllerOptions } from "../browser/controller.js";
 
 export type CodexBackend = "auto" | "app-server" | "exec";
 
@@ -15,13 +16,16 @@ export type HybridCodexRunnerOptions = {
   codexBin?: string;
   execSandbox?: CodexExecSandbox;
   timeoutMs?: number;
+  browser?: BrowserControllerOptions;
 };
 
 export class HybridCodexRunner {
   private readonly appServer: AppServerCodexRunner;
   private readonly exec: CodexExecRunner;
+  private readonly browser?: BrowserController;
 
   constructor(private readonly options: HybridCodexRunnerOptions) {
+    this.browser = options.browser?.enabled ? new BrowserController(options.browser) : undefined;
     this.appServer = new AppServerCodexRunner({
       codexBin: options.codexBin,
       requestTimeoutMs: options.timeoutMs
@@ -34,14 +38,23 @@ export class HybridCodexRunner {
   }
 
   async run(input: CodexRunnerInput): Promise<CodexRunResult> {
-    const requiresAppServerForStreaming = Boolean(input.onDelta || input.onProgress);
-    if (this.options.backend === "exec" && !requiresAppServerForStreaming) {
+    const requiresAppServer = Boolean(input.onDelta || input.onProgress || this.browser);
+    if (this.options.backend === "exec" && !requiresAppServer) {
       return this.exec.run(input);
     }
     try {
-      return await this.appServer.run(input);
+      return await this.appServer.run(this.browser ? {
+        ...input,
+        dynamicTools: BROWSER_DYNAMIC_TOOLS,
+        onDynamicToolCall: (request) => this.browser!.call({
+          sessionKey: input.sessionKey ?? input.threadId ?? input.cwd,
+          cwd: input.cwd,
+          request,
+          requestApproval: input.onApproval
+        })
+      } : input);
     } catch (error) {
-      if (this.options.backend === "app-server") {
+      if (this.options.backend === "app-server" || this.browser) {
         throw error;
       }
       const fallback = await this.exec.run({
@@ -78,5 +91,6 @@ export class HybridCodexRunner {
   close(): void {
     this.appServer.close();
     this.exec.close();
+    void this.browser?.close();
   }
 }

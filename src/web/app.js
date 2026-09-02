@@ -483,6 +483,12 @@ function renderSettings() {
   document.querySelector("#backendInput").value = state.config.codexBackend || "auto";
   document.querySelector("#sandboxInput").value = state.config.codexExecSandbox || "";
   document.querySelector("#streamRepliesInput").checked = Boolean(state.config.streamReplies);
+  document.querySelector("#browserEnabledInput").checked = Boolean(state.config.browserEnabled);
+  document.querySelector("#browserHeadlessInput").checked = Boolean(state.config.browserHeadless);
+  document.querySelector("#browserExecutablePathInput").value = state.config.browserExecutablePath || "";
+  document.querySelector("#browserProfileDirInput").value = state.config.browserProfileDir || "";
+  document.querySelector("#browserOutputDirInput").value = state.config.browserOutputDir || "";
+  document.querySelector("#browserAllowedDomainsInput").value = (state.config.browserAllowedDomains || []).join("\n");
   renderModelOptions();
   document.querySelector("#effectiveModelValue").textContent = state.codexRuntime?.model || state.config.model || "Codex 默认";
   document.querySelector("#effectiveEffortValue").textContent = state.codexRuntime?.effort || state.config.effort || "Codex 默认";
@@ -1287,7 +1293,13 @@ async function saveSettings(event) {
         codexExecSandbox: document.querySelector("#sandboxInput").value || null,
         model: document.querySelector("#modelInput").value.trim(),
         effort: document.querySelector("#effortInput").value.trim(),
-        streamReplies: document.querySelector("#streamRepliesInput").checked
+        streamReplies: document.querySelector("#streamRepliesInput").checked,
+        browserEnabled: document.querySelector("#browserEnabledInput").checked,
+        browserHeadless: document.querySelector("#browserHeadlessInput").checked,
+        browserExecutablePath: document.querySelector("#browserExecutablePathInput").value.trim() || null,
+        browserProfileDir: document.querySelector("#browserProfileDirInput").value.trim(),
+        browserOutputDir: document.querySelector("#browserOutputDirInput").value.trim(),
+        browserAllowedDomains: document.querySelector("#browserAllowedDomainsInput").value.split("\n").map((line) => line.trim()).filter(Boolean)
       }
     });
     state.config = result.config;

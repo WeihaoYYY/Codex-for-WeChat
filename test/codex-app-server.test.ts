@@ -118,6 +118,55 @@ test("interrupts the active V2 turn with both threadId and turnId", async (t) =>
   assert.match(result.error?.message ?? "", /interrupted/i);
 });
 
+test("routes command approvals to the active turn callback", async (t) => {
+  const runner = new AppServerCodexRunner({
+    codexBin: path.join(fixturesDir, "fake-codex-app-server.mjs"),
+    requestTimeoutMs: 2_000
+  });
+  t.after(() => runner.close());
+  const requests: string[] = [];
+
+  const result = await runner.run({
+    prompt: "approval",
+    cwd: "/tmp/project",
+    onApproval: async (request) => {
+      requests.push(`${request.kind}:${request.detail}`);
+      return "accept";
+    }
+  });
+
+  assert.match(requests[0], /^command:/);
+  assert.match(requests[0], /npm test/);
+  assert.equal(result.text, "reply:approval:accept");
+});
+
+test("executes client-owned dynamic tools through item/tool/call", async (t) => {
+  const runner = new AppServerCodexRunner({
+    codexBin: path.join(fixturesDir, "fake-codex-app-server.mjs"),
+    requestTimeoutMs: 2_000
+  });
+  t.after(() => runner.close());
+  const calls: string[] = [];
+
+  const result = await runner.run({
+    prompt: "dynamic",
+    cwd: "/tmp/project",
+    dynamicTools: [{
+      type: "namespace",
+      name: "weixin_browser",
+      description: "test",
+      tools: [{ type: "function", name: "snapshot", description: "test", inputSchema: { type: "object" } }]
+    }],
+    onDynamicToolCall: async (request) => {
+      calls.push(`${request.namespace}:${request.tool}`);
+      return { success: true, contentItems: [{ type: "inputText", text: "tool-ok" }] };
+    }
+  });
+
+  assert.deepEqual(calls, ["weixin_browser:snapshot"]);
+  assert.equal(result.text, "reply:dynamic:tool-ok");
+});
+
 test("auto backend falls back to codex exec for an existing thread", async (t) => {
   const runner = new HybridCodexRunner({
     backend: "auto",

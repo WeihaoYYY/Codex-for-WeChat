@@ -1,7 +1,7 @@
-<h1 align="center">codex-weixin</h1>
+<h1 align="center">CodeX From WeChat</h1>
 
 <p align="center">
-  <img src="src/web/favicon.svg" alt="codex-weixin logo" width="128" height="128" />
+  <img src="src/web/favicon.svg" alt="CodeX From WeChat logo" width="128" height="128" />
 </p>
 
 <p align="center">
@@ -9,16 +9,22 @@
 </p>
 
 <p align="center">
-  <strong>Connect multiple personal WeChat accounts to a local OpenAI Codex installation.</strong>
+  <strong>Send file, command, and controlled browser tasks from personal WeChat to local Codex.</strong>
 </p>
 
-`codex-weixin` is a cross-platform, local-only WeChat service dedicated to Codex. Starting it opens a Web management page where users scan a WeChat QR code, manage accounts and workspaces, and switch Codex sessions.
+**CodeX From WeChat** is an enhanced distribution based on [`XavierJiezou/codex-weixin`](https://github.com/XavierJiezou/codex-weixin) `v0.3.8`. It keeps the upstream WeChat, file-transfer, and session-management features while adding sender-bound approvals, immediate long-task interruption, and controlled browser tasks in an isolated profile.
 
 ```text
-Multiple WeChat accounts <-> codex-weixin <-> local Codex <-> allowed workspaces
+Personal WeChat <-> CodeX From WeChat <-> Codex App Server <-> allowed workspaces / isolated browser
 ```
 
-It is not a general messaging gateway. The management page is never exposed to the LAN or public Internet.
+It is not a general messaging gateway. The management page listens on `127.0.0.1` and is not exposed to the LAN or public Internet.
+
+> [!IMPORTANT]
+> This is a third-party open-source project, not an official OpenAI or WeChat integration. Authorize only your own sender and explicit workspace roots. Never publish the service state directory, WeChat tokens, Codex credentials, or browser profile.
+
+> [!NOTE]
+> The internal npm package and executable remain named `codex-weixin` for upstream compatibility; the repository and product name are **CodeX From WeChat**.
 
 ## Feature status
 
@@ -38,6 +44,8 @@ Screenshots live under `docs/images/screenshots/`. The Web management screenshot
 | ✅ | Process progress | Enabled by default; Codex progress reaches WeChat immediately and appears in a collapsible Web timeline with elapsed time, while final answers stay intact. | Pending: `docs/images/screenshots/web-process-progress.png` |
 | ✅ | Typing state and deduplication | Web typing state plus persistent sync cursors and message IDs prevent duplicate replies. | Pending: `docs/images/screenshots/wechat-typing.png` |
 | ✅ | App-server first | New and resumed sessions prefer Codex app-server V2 and fall back to `codex exec` when unavailable. | Pending: `docs/images/screenshots/wechat-status.png` |
+| ✅ | WeChat approvals | Sender-bound, one-time `/approve`, `/approve-session`, and `/deny` codes answer command and file-change approval requests. | Pending: `docs/images/screenshots/wechat-approval.png` |
+| ✅ | Controlled browser | An isolated Chrome/Edge profile supports navigation, snapshots, filling, screenshots, and uploads with domain and consequential-action approval. | Pending: `docs/images/screenshots/wechat-browser.png` |
 | ✅ | Web auto-update | Selects npm or npmmirror, updates the active npm runtime, verifies it, then restarts and reconnects. | Pending: `docs/images/screenshots/web-auto-update.png` |
 
 ## Web management preview
@@ -60,27 +68,40 @@ codex
 
 ## Install and start
 
-Install globally from npm:
+This enhanced distribution is not published to npm. Install from this repository; `npm install -g codex-weixin` installs the upstream package without WeChat approvals or browser tools.
 
-```bash
-npm install -g codex-weixin
-codex-weixin
+```powershell
+git clone https://github.com/WeihaoYYY/codex-from-wechat.git
+Set-Location "codex-from-wechat"
+npm ci
+npm run typecheck
+npm run build
+npm start
 ```
 
-Or install from source:
+The service opens [http://127.0.0.1:8787](http://127.0.0.1:8787). To use a fixed port and private state directory:
 
-```bash
-git clone https://github.com/XavierJiezou/codex-weixin.git
-cd codex-weixin
-npm install
-npm run build
+```powershell
+$env:CODEX_WEIXIN_PORT="18787"
+$env:CODEX_WEIXIN_STATE_DIR="C:\Codex\codex-from-wechat-state"
+$env:CODEX_WEIXIN_OPEN="0"
+npm start
+```
+
+To install the compatible global executable after building:
+
+```powershell
 npm install -g .
 codex-weixin
 ```
 
-The service opens [http://127.0.0.1:8787](http://127.0.0.1:8787). To run without a global install:
+To update a source installation later:
 
-```bash
+```powershell
+Set-Location "codex-from-wechat"
+git pull --ff-only
+npm ci
+npm run build
 npm start
 ```
 
@@ -91,6 +112,30 @@ npm start
 3. Send any message to the connected account.
 4. Return to WeChat Accounts and allow the pending sender.
 5. Send the message again to start a Codex turn.
+
+To run controlled browser tasks from WeChat:
+
+1. Enable **Browser tools** under **Settings → WeChat browser control**.
+2. Leave the browser executable empty for automatic Chrome/Edge discovery; the default isolated profile and output directories are suitable for most users.
+3. Initially leave the pre-approved domain list empty so every new domain requires a WeChat confirmation.
+4. Save, then send `/new` so the new Codex thread receives the browser tools.
+5. Ask Codex to open a site. Inspect the `A1` approval summary and reply with `/approve A1` or `/deny A1`.
+
+Sign in manually in the isolated Chrome/Edge window the first time a site requires an account. Its cookies remain in the private service state and are not read from the everyday browser profile.
+
+### Quick usage example
+
+```text
+/status
+/bind C:\\path\\to\\an-allowed-project
+/new
+Open example.com, read the page title, and take a screenshot
+/approve A1
+Edit README.md in the current project, but first tell me what you plan to change
+/stop
+```
+
+File changes, commands, new domains, uploads, and consequential browser actions may pause for approval. Read the operation summary before choosing `/approve A1` or `/deny A1`.
 
 Repeat the QR flow to add more accounts. Every account has its own monitor, sender authorization, inbound directory, and managed-session state. A failed account does not stop the others. Scanning the same WeChat account again after an expired login refreshes the existing credentials while preserving its local remark, authorization, and sessions instead of creating an empty duplicate. Account removal can retain history: credentials are deleted immediately, while a later scan by the same WeChat user restores the previous remark, authorization, and managed sessions.
 
@@ -126,6 +171,9 @@ The UI uses local remarks instead of treating internal IDs as account names. Exp
 /stream <on|off|default>       Enable, disable, or restore global process progress
 /prompt start                 Buffer multiple WeChat messages
 /prompt done                  Submit the buffer as one Codex turn
+/approve A<number>            Approve one pending operation
+/approve-session A<number>    Reuse an upstream-supported approval for this Codex session
+/deny A<number>               Deny one pending operation
 /stop                         Interrupt the current Codex task
 ```
 
@@ -153,7 +201,9 @@ Only absolute local paths are accepted. Native outbound types are `image`, `vide
 
 The default `codexBackend` is `auto`. On the first Codex message, the service starts one persistent `codex app-server --stdio` process and uses the current `initialize`, `thread/*`, and `turn/*` protocol. New and resumed conversations prefer app-server; startup, handshake, or request failures automatically fall back to `codex exec` or `codex exec resume`.
 
-WeChat does not currently expose Codex approval prompts, so app-server uses `approvalPolicy: "never"` and operates only within the configured Codex sandbox instead of waiting for an approval that cannot be answered in WeChat. The management page can still pin the backend to `app-server` or `exec` for diagnostics.
+WeChat turns use `approvalPolicy: "on-request"`. Commands, file changes, new browser domains, uploads, and consequential browser clicks pause and send a sender-bound one-time approval code to WeChat. Reply with `/approve A1`, `/approve-session A1`, or `/deny A1`; codes expire after 10 minutes and `/stop` cancels all approvals for that sender. Browser submissions and uploads cannot be upgraded to session-wide approval.
+
+The optional browser tools use an isolated persistent Chrome/Edge profile. Enable them in Settings, then send `/new` because dynamic tools are attached only when a new Codex thread starts. The first visit to a domain requires approval, and the isolated profile must be signed in separately from the user's everyday browser.
 
 ## Models and reasoning effort
 
@@ -173,6 +223,8 @@ Service state and the default Codex workspace share this directory:
   retained-accounts.json    Recovery index for removed accounts; never stores tokens
   runtime/<account-id>/     Sender authorization and managed sessions
   inbound/<account-id>/     Inbound WeChat attachments
+  browser-profile/          Isolated persistent browser sign-in state
+  browser-output/           Browser screenshots and other local output
   config.json               Codex and workspace configuration
   logs/
 ```
@@ -196,6 +248,9 @@ CODEX_WEIXIN_OPEN=0
 - WeChat credentials never reach the management page.
 - Unknown senders are denied until explicitly allowed.
 - `/bind` accepts only absolute paths under the workspace allowlist.
+- Browser tools allow public HTTP(S) only, block private/local network targets for pages and subresources, and require approval for new domains.
+- Uploads are limited to allowed workspaces; submissions and uploads always require one-time approval.
+- Browser cookies stay in the local isolated profile. Never commit or share the state directory.
 - `danger-full-access` bypasses the Codex filesystem sandbox and must be enabled only when full-machine access is acceptable.
 - Concurrent accounts share local compute resources and Codex quotas.
 
@@ -213,4 +268,12 @@ The project is a clean-room independent implementation under the MIT License. It
 
 When started from a source checkout with `npm run dev` or `npm start`, the Web page checks for updates but does not install them; update the Git checkout and rebuild instead. Global installations and isolated `node_modules/codex-weixin` runtimes update the npm prefix that owns the active package and verify the target version and service entry before restarting. On Windows, the updater first releases any process working-directory lock inside the package tree so npm can replace it without `EBUSY`.
 
-See [CHANGELOG.md](./CHANGELOG.md) for release history.
+## References and license
+
+- Enhanced source: [WeihaoYYY/codex-from-wechat](https://github.com/WeihaoYYY/codex-from-wechat)
+- Upstream project: [XavierJiezou/codex-weixin](https://github.com/XavierJiezou/codex-weixin)
+- Codex CLI: [OpenAI Codex CLI](https://learn.chatgpt.com/zh-Hans/docs/codex/cli)
+- Authentication: [OpenAI Authentication](https://learn.chatgpt.com/zh-Hans/docs/auth)
+- App Server: [OpenAI Codex App Server](https://learn.chatgpt.com/zh-Hans/docs/app-server)
+
+See [CHANGELOG.md](./CHANGELOG.md) for release history. The upstream MIT license and copyright notice are retained in [LICENSE](./LICENSE) and [NOTICE](./NOTICE).

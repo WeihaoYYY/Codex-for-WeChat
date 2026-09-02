@@ -4,6 +4,7 @@ import path from "node:path";
 import { parseCodexExecSandbox, type CodexExecSandbox } from "../codex/sandbox.js";
 import { readJsonFile, writeJsonFile } from "./json-store.js";
 import type { StatePaths } from "./paths.js";
+import { defaultBrowserProfileDir } from "../browser/controller.js";
 
 export const MAX_INBOUND_BYTES = 100 * 1024 * 1024;
 const LEGACY_DEFAULT_INBOUND_BYTES = 50 * 1024 * 1024;
@@ -21,6 +22,12 @@ export type CodexWeixinConfig = {
   maxBufferItems: number;
   promptBufferTtlMs: number;
   maxInboundBytes: number;
+  browserEnabled: boolean;
+  browserProfileDir: string;
+  browserOutputDir: string;
+  browserExecutablePath?: string;
+  browserHeadless: boolean;
+  browserAllowedDomains: string[];
 };
 
 export function defaultConfig(cwd = path.join(os.homedir(), ".codex-weixin")): CodexWeixinConfig {
@@ -33,7 +40,12 @@ export function defaultConfig(cwd = path.join(os.homedir(), ".codex-weixin")): C
     streamReplies: true,
     maxBufferItems: 50,
     promptBufferTtlMs: 10 * 60_000,
-    maxInboundBytes: MAX_INBOUND_BYTES
+    maxInboundBytes: MAX_INBOUND_BYTES,
+    browserEnabled: false,
+    browserProfileDir: defaultBrowserProfileDir(),
+    browserOutputDir: path.join(os.homedir(), ".codex-weixin", "browser-output"),
+    browserHeadless: false,
+    browserAllowedDomains: []
   };
 }
 
@@ -47,10 +59,23 @@ export function loadConfig(paths: StatePaths, cwd?: string): CodexWeixinConfig {
     codexExecSandbox,
     streamReplies: typeof loaded.streamReplies === "boolean" ? loaded.streamReplies : base.streamReplies,
     maxInboundBytes: normalizeInboundBytes(loaded.maxInboundBytes, base.maxInboundBytes),
+    browserEnabled: loaded.browserEnabled === true,
+    browserProfileDir: path.resolve(loaded.browserProfileDir ?? base.browserProfileDir),
+    browserOutputDir: path.resolve(loaded.browserOutputDir ?? base.browserOutputDir),
+    browserExecutablePath: loaded.browserExecutablePath?.trim() ? path.resolve(loaded.browserExecutablePath) : undefined,
+    browserHeadless: loaded.browserHeadless === true,
+    browserAllowedDomains: normalizeDomains(loaded.browserAllowedDomains),
     allowedSenderIds: loaded.allowedSenderIds ?? base.allowedSenderIds,
     allowedWorkspaces: (loaded.allowedWorkspaces?.length ? loaded.allowedWorkspaces : base.allowedWorkspaces)
       .map((workspace) => path.resolve(workspace))
   };
+}
+
+function normalizeDomains(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.flatMap((item) => typeof item === "string" && item.trim()
+    ? [item.trim().toLowerCase().replace(/^\.+|\.+$/g, "")]
+    : []))].sort();
 }
 
 export function saveConfig(paths: StatePaths, config: CodexWeixinConfig): void {

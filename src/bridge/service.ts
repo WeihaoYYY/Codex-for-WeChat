@@ -2,6 +2,8 @@ import path from "node:path";
 
 import { AccessController } from "./access.js";
 import { parseActionBlocks } from "./actions.js";
+import { ApprovalBroker, type ApprovalResolution } from "./approval-broker.js";
+import { parseCommand } from "./commands.js";
 import { buildPrompt, buildPromptPreview, chunkText, parsePrompt } from "./format.js";
 import { PromptBuffer } from "./prompt-buffer.js";
 import type { CodexModelOption, CodexRuntimeInfo } from "../codex/app-server-runner.js";
@@ -14,6 +16,7 @@ import type { NormalizedWeixinMessage } from "../weixin/messages.js";
 import type { PromptBufferItem } from "./prompt-buffer.js";
 
 export type BridgeServiceOptions = {
+  accountId?: string;
   config: CodexWeixinConfig;
   stateStore: RuntimeStateStore;
   weixin: WeixinApiClient;
@@ -26,6 +29,7 @@ export type BridgeServiceOptions = {
 
 export class BridgeService {
   private readonly access: AccessController;
+  private readonly approvals = new ApprovalBroker();
   private readonly buffers: PromptBuffer;
   private readonly runner: HybridCodexRunner;
 
@@ -41,7 +45,8 @@ export class BridgeService {
     this.runner = options.runner ?? new HybridCodexRunner({
       backend: options.config.codexBackend,
       codexBin: options.config.codexBin,
-      execSandbox: options.config.codexExecSandbox
+      execSandbox: options.config.codexExecSandbox,
+      browser: browserOptions(options.config)
     });
   }
 
@@ -110,13 +115,55 @@ export class BridgeService {
       case "prompt":
         await this.handlePromptCommand(message.senderId, command.arg);
         return;
+      case "approve":
+        await this.handleApprovalCommand(message.senderId, command.arg, "accept");
+        return;
+      case "approve-session":
+        await this.handleApprovalCommand(message.senderId, command.arg, "acceptForSession");
+        return;
+      case "deny":
+        await this.handleApprovalCommand(message.senderId, command.arg, "decline");
+        return;
       case "stop":
+        this.approvals.cancelForSender(message.senderId);
         await this.runner.stop(this.options.stateStore.getThread(message.senderId));
         await this.reply(message.senderId, "Stop signal sent.");
         return;
       default:
         await this.reply(message.senderId, `Unknown command: /${command.name}. Send /help.`);
     }
+  }
+
+  private async handleApprovalCommand(
+    senderId: string,
+    rawCode: string,
+    decision: "accept" | "acceptForSession" | "decline"
+  ): Promise<void> {
+    if (!rawCode.trim()) {
+      const pending = this.approvals.list(senderId);
+      if (!pending.length) {
+        await this.reply(senderId, "当前没有等待确认的操作。");
+        return;
+      }
+      await this.reply(senderId, pending.map((approval) => formatPendingApproval(approval)).join("\n\n"));
+      return;
+    }
+    const result = this.approvals.resolve(senderId, rawCode, decision);
+    await this.reply(senderId, approvalResolutionMessage(rawCode, decision, result));
+  }
+
+  private async requestApproval(
+    senderId: string,
+    request: Parameters<ApprovalBroker["request"]>[1]
+  ): Promise<Awaited<ReturnType<ApprovalBroker["request"]>["promise"]>> {
+    const pending = this.approvals.request(senderId, request);
+    try {
+      await this.reply(senderId, formatPendingApproval(pending));
+    } catch (error) {
+      this.approvals.resolve(senderId, pending.code, "cancel");
+      throw error;
+    }
+    return pending.promise;
   }
 
   private async bindWorkspace(senderId: string, rawPath: string): Promise<void> {
@@ -383,6 +430,8 @@ export class BridgeService {
           threadId,
           model: session.model ?? this.options.config.model,
           effort: session.effort ?? this.options.config.effort,
+          sessionKey: `${this.options.accountId ?? "default"}:${message.senderId}:${session.id}`,
+          onApproval: (request) => this.requestApproval(message.senderId, request),
           ...(progressEnabled ? {
             onProgress: async (progress: string) => {
               const progressText = progress.trim();
@@ -465,7 +514,8 @@ export class BridgeService {
       `exec sandbox: ${this.options.config.codexExecSandbox ?? "(Codex default)"}`,
       `model: ${runtime.model ?? "(Codex default)"}`,
       `effort: ${runtime.effort ?? "(Codex default)"}`,
-      `stream replies: ${(session?.streamReplies ?? this.options.config.streamReplies) ? "on" : "off"}${typeof session?.streamReplies === "boolean" ? " (session)" : " (global)"}`
+      `stream replies: ${(session?.streamReplies ?? this.options.config.streamReplies) ? "on" : "off"}${typeof session?.streamReplies === "boolean" ? " (session)" : " (global)"}`,
+      `browser control: ${this.options.config.browserEnabled ? "on" : "off"}`
     ].join("\n");
   }
 
@@ -524,15 +574,6 @@ export class BridgeService {
   }
 }
 
-function parseCommand(text: string): { name: string; arg: string } | undefined {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("/")) {
-    return undefined;
-  }
-  const [name, ...rest] = trimmed.slice(1).split(/\s+/);
-  return { name: name.toLowerCase(), arg: rest.join(" ") };
-}
-
 function helpText(): string {
   return [
     "codex-weixin commands:",
@@ -546,8 +587,57 @@ function helpText(): string {
     "/stream [on|off|default] - view or switch streaming replies",
     "/prompt start - buffer multiple WeChat messages",
     "/prompt done - submit buffered prompt",
-    "/stop - interrupt the current Codex task"
+    "/approve A1 - approve one pending operation",
+    "/approve-session A1 - approve and allow similar operations for this Codex session",
+    "/deny A1 - deny one pending operation",
+    "/stop - interrupt the current Codex task (or send: 停止)"
   ].join("\n");
+}
+
+function browserOptions(config: CodexWeixinConfig) {
+  return {
+    enabled: config.browserEnabled,
+    userDataDir: config.browserProfileDir,
+    outputDir: config.browserOutputDir,
+    executablePath: config.browserExecutablePath,
+    headless: config.browserHeadless,
+    allowedDomains: config.browserAllowedDomains,
+    allowedWorkspaces: config.allowedWorkspaces
+  };
+}
+
+function formatPendingApproval(approval: {
+  code: string;
+  request: { title: string; detail: string; allowForSession?: boolean };
+  expiresAt: string;
+}): string {
+  const expiresAt = new Date(approval.expiresAt);
+  const expiry = Number.isNaN(expiresAt.getTime())
+    ? "10 分钟内"
+    : `${String(expiresAt.getHours()).padStart(2, "0")}:${String(expiresAt.getMinutes()).padStart(2, "0")}`;
+  return [
+    `【需要确认 ${approval.code}】${approval.request.title}`,
+    approval.request.detail,
+    "",
+    `批准一次：/approve ${approval.code}`,
+    ...(approval.request.allowForSession ? [`本会话批准：/approve-session ${approval.code}`] : []),
+    `拒绝：/deny ${approval.code}`,
+    `有效期至 ${expiry}；编号只能使用一次。`
+  ].join("\n");
+}
+
+function approvalResolutionMessage(
+  rawCode: string,
+  decision: "accept" | "acceptForSession" | "decline",
+  result: ApprovalResolution
+): string {
+  const code = rawCode.trim().toUpperCase() || rawCode;
+  if (result.status === "not-found") return `没有找到等待确认的操作 ${code}，它可能已过期或已处理。`;
+  if (result.status === "wrong-sender") return `操作 ${code} 不属于当前微信联系人，已拒绝处理。`;
+  if (result.status === "session-not-allowed") return `操作 ${code} 只允许批准一次。请发送 /approve ${code}，或发送 /deny ${code}。`;
+  if (decision === "decline") return `已拒绝 ${result.approval.code}，原任务将继续处理拒绝结果。`;
+  if (decision === "acceptForSession") return `已批准 ${result.approval.code}，并允许 Codex 在本会话中沿用该授权（如上游支持）。`;
+  return `已批准 ${result.approval.code}，原任务继续执行。`;
 }
 
 function formatSessionTime(value: string): string {

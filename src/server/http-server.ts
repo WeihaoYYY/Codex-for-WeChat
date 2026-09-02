@@ -36,7 +36,13 @@ const configSchema = z.object({
   codexExecSandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).nullable().optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
-  streamReplies: z.boolean().optional()
+  streamReplies: z.boolean().optional(),
+  browserEnabled: z.boolean().optional(),
+  browserProfileDir: z.string().min(1).optional(),
+  browserOutputDir: z.string().min(1).optional(),
+  browserExecutablePath: z.string().nullable().optional(),
+  browserHeadless: z.boolean().optional(),
+  browserAllowedDomains: z.array(z.string()).optional()
 });
 const MAX_WEB_UPLOAD_FILES = 10;
 const MULTIPART_OVERHEAD_BYTES = 1024 * 1024;
@@ -363,7 +369,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       allowedWorkspaces,
       codexExecSandbox: input.codexExecSandbox ?? undefined,
       model: optionalString(input.model),
-      effort: optionalString(input.effort)
+      effort: optionalString(input.effort),
+      browserProfileDir: path.resolve(input.browserProfileDir ?? current.browserProfileDir),
+      browserOutputDir: path.resolve(input.browserOutputDir ?? current.browserOutputDir),
+      browserExecutablePath: optionalString(input.browserExecutablePath),
+      browserAllowedDomains: input.browserAllowedDomains ?? current.browserAllowedDomains
     });
     await context.accountManager.restartRunning();
     sendJson(response, 200, {

@@ -1,7 +1,7 @@
-<h1 align="center">codex-weixin</h1>
+<h1 align="center">CodeX From WeChat</h1>
 
 <p align="center">
-  <img src="src/web/favicon.svg" alt="codex-weixin logo" width="128" height="128" />
+  <img src="src/web/favicon.svg" alt="CodeX From WeChat logo" width="128" height="128" />
 </p>
 
 <p align="center">
@@ -9,16 +9,22 @@
 </p>
 
 <p align="center">
-  <strong>把个人微信账号接入本机 OpenAI Codex。</strong>
+  <strong>从个人微信向本机 Codex 下达文件、命令和受控网页任务。</strong>
 </p>
 
-`codex-weixin` 是一个跨平台、本机运行的微信到 Codex 专用服务。启动后会打开 Web 管理页；用户在页面扫码登录微信，即可从微信私聊控制本机 Codex、管理工作目录和切换会话。
+**CodeX From WeChat** 是基于 [`XavierJiezou/codex-weixin`](https://github.com/XavierJiezou/codex-weixin) `v0.3.8` 的增强分支。它在原有微信聊天、文件传输和会话管理基础上，加入微信内审批、长任务即时停止，以及使用独立浏览器 profile 的受控网页操作。
 
 ```text
-微信账号 <-> codex-weixin <-> 本机 Codex <-> 允许的工作目录
+个人微信 <-> CodeX From WeChat <-> Codex App Server <-> 允许的工作目录 / 独立浏览器
 ```
 
-它不是通用消息网关，不接入其他聊天平台，也不把管理页面开放到局域网或公网。
+项目只在本机监听 `127.0.0.1`，不是通用消息网关，也不会把管理页面开放到局域网或公网。
+
+> [!IMPORTANT]
+> 这是第三方开源项目，不是 OpenAI 或微信官方集成。请只授权自己的微信联系人和明确的工作目录；不要提交或分享状态目录、微信 token、Codex 登录凭据或浏览器 profile。
+
+> [!NOTE]
+> 内部 npm 包名和可执行命令暂时仍是 `codex-weixin`，以保持与上游兼容；仓库和产品名称为 **CodeX From WeChat**。
 
 ## 核心功能
 
@@ -40,7 +46,7 @@
 
 ### 3. Codex CLI 原生命令
 
-微信端支持 `/status`、`/new`、`/resume`、`/bind`、`/model`、`/effort`、`/stream`、`/prompt start`、`/prompt done` 和 `/stop`，可以管理会话、工作目录、模型、推理强度和过程进度。
+微信端支持 `/status`、`/new`、`/resume`、`/bind`、`/model`、`/effort`、`/stream`、`/prompt start`、`/prompt done`、`/approve`、`/deny` 和 `/stop`，可以管理会话、工作目录、模型、推理强度、过程进度与高风险操作确认。
 
 <p align="center">
   <img src="docs/images/screenshots/wechat-cli-commands.png" alt="在微信中使用 Codex CLI 原生命令" width="420" />
@@ -78,6 +84,12 @@ Web 端可以配置工作目录、Codex 后端、模型、推理强度和过程�
   <img src="docs/images/screenshots/web-global-settings.png" alt="codex-weixin Web 全局设置" width="100%" />
 </p>
 
+### 8. 微信浏览器任务与审批
+
+启用“微信浏览器控制”后，Codex 可以在一个独立的 Chrome / Edge 配置中打开公共网站、读取页面、填写表单、截图以及选择允许工作目录内的上传文件。首次访问新域名、上传文件、提交/发送/保存/购买/删除等可能改变外部状态的点击都会暂停，并把一次性确认编号发到微信。
+
+浏览器工具只会挂载到启用功能后新建的 Codex thread。保存设置或升级后，请先在微信发送 `/new`，再发送浏览器任务。独立浏览器不会读取日常 Chrome 配置；第一次使用需要在弹出的浏览器中自行登录目标网站。
+
 ## 环境要求
 
 - Node.js `>=22`
@@ -92,26 +104,42 @@ codex
 
 ## 安装
 
-推荐从 npm 全局安装：
+这个增强分支尚未发布到 npm。请从本仓库源码安装；运行 `npm install -g codex-weixin` 得到的是上游官方版，不包含微信审批和浏览器工具。
 
-```bash
-npm install -g codex-weixin
+```powershell
+git clone https://github.com/WeihaoYYY/codex-from-wechat.git
+Set-Location "codex-from-wechat"
+npm ci
+npm run typecheck
+npm run build
+npm start
+```
+
+服务默认打开 [http://127.0.0.1:8787](http://127.0.0.1:8787)。如果需要固定端口和私有状态目录：
+
+```powershell
+$env:CODEX_WEIXIN_PORT="18787"
+$env:CODEX_WEIXIN_STATE_DIR="C:\Codex\codex-from-wechat-state"
+$env:CODEX_WEIXIN_OPEN="0"
+npm start
+```
+
+此时打开 [http://127.0.0.1:18787](http://127.0.0.1:18787)。如果希望安装全局命令，可在构建后运行：
+
+```powershell
+npm install -g .
 codex-weixin
 ```
 
-也可以从源码安装：
+完整 Windows 安装、登录、扫码、审批和排错步骤见下方各节。
 
-```bash
-git clone https://github.com/XavierJiezou/codex-weixin.git
-cd codex-weixin
-npm install
+以后更新源码版：
+
+```powershell
+Set-Location "codex-from-wechat"
+git pull --ff-only
+npm ci
 npm run build
-npm install -g .
-```
-
-服务会自动打开 [http://127.0.0.1:8787](http://127.0.0.1:8787)。如果不希望全局安装，也可以在项目目录运行：
-
-```bash
 npm start
 ```
 
@@ -122,6 +150,30 @@ npm start
 3. 在微信中给新接入的账号发送任意消息。
 4. 回到“微信账号”，允许页面中出现的待授权联系人。
 5. 再次从微信发送消息，Codex 会在默认工作目录中开始处理。
+
+如果需要让 Codex 从微信执行受控网页任务：
+
+1. 在“设置 → 微信浏览器控制”中开启“启用浏览器工具”。
+2. 浏览器程序路径可以留空；独立登录配置目录和截图输出目录使用页面默认值即可。
+3. 建议第一次把“无需逐次确认的域名”留空，让每个新域名都由微信确认。
+4. 保存后在微信发送 `/new` 创建一个带浏览器工具的新 thread。
+5. 让 Codex 打开网页；首次访问新域名会收到 `A1` 这类确认编号。核对操作后发送 `/approve A1` 或 `/deny A1`。
+
+独立浏览器第一次打开某个需要账号的网站时，请在电脑上出现的 Chrome / Edge 窗口中手动登录。之后 Cookie 只保存在该项目的私有状态目录，不会读取日常浏览器 profile。
+
+### 快速使用示例
+
+```text
+/status
+/bind E:\\允许的项目目录
+/new
+请打开 example.com，读取页面标题并截图
+/approve A1
+请修改当前项目里的 README.md，先告诉我你准备改什么
+/stop
+```
+
+文件修改、命令执行、新域名、上传和提交类网页操作可能暂停等待审批。请先阅读微信里的操作摘要，再决定 `/approve A1` 或 `/deny A1`；不要盲目批准。
 
 继续添加账号时重复扫码即可。每个账号都有独立的轮询任务、联系人授权、入站文件和会话状态；单个账号发生错误不会停止其他账号。同一个微信账号因登录过期等原因重新扫码时，会刷新原账号凭据并保留本机备注、授权和会话，不会创建新的空账号。移除账号时可以保留会话历史；登录凭据会立即删除，同一微信用户以后重新扫码时会恢复原备注、授权和受管会话。
 
@@ -157,6 +209,9 @@ npm start
 /stream <on|off|default>       开启、关闭过程进度，或恢复继承全局设置
 /prompt start                 开始缓冲多条微信消息
 /prompt done                  将缓冲内容作为一次 Codex turn 提交
+/approve A<编号>              批准一次等待中的操作
+/approve-session A<编号>      在当前 Codex 会话中沿用上游支持的授权
+/deny A<编号>                 拒绝等待中的操作
 /stop                         中断当前 Codex 任务
 ```
 
@@ -184,7 +239,9 @@ Codex 可以在最终回复中声明需要发送的本机文件：
 
 默认的 `codexBackend` 是 `auto`。第一次收到 Codex 消息时，服务会启动一个持久的 `codex app-server --stdio` 进程，并使用新版 `initialize`、`thread/*` 和 `turn/*` 协议。新会话和已有会话都优先通过 app-server 运行；如果 app-server 无法启动、握手或处理请求，会自动回退到 `codex exec` 或 `codex exec resume`。
 
-微信端目前没有 Codex 审批弹窗，因此 app-server 使用 `approvalPolicy: "never"`，只在现有 Codex sandbox 权限内执行，不会等待一个无法在微信中回答的本机审批请求。管理页仍可把后端固定为 `app-server` 或 `exec`，用于排查问题。
+微信 turn 使用 `approvalPolicy: "on-request"`。Codex 请求执行本机命令、修改文件或使用需要确认的浏览器操作时，服务会向同一微信联系人发送 `A1` 这类一次性编号；只有该联系人可以用 `/approve A1`、`/approve-session A1` 或 `/deny A1` 回答。编号默认 10 分钟过期且只能使用一次；`/stop` 也会取消该联系人的所有待确认操作。浏览器提交和文件上传只接受单次 `/approve`，不能升级为会话级授权。
+
+启用浏览器控制时，后端固定使用 app-server，避免回退到不支持动态浏览器工具的 `codex exec`。已有 thread 不会被事后注入工具；请发送 `/new` 创建新会话。
 
 ## 模型和推理强度
 
@@ -204,6 +261,8 @@ IkunCoding 提供方会额外显示 `gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6
   retained-accounts.json    已移除账号的恢复索引，不包含 token
   runtime/<account-id>/     联系人授权和受管会话状态
   inbound/<account-id>/     微信入站附件
+  browser-profile/          与日常浏览器隔离的持久登录配置
+  browser-output/           浏览器截图等本机输出
   config.json               Codex 和工作区配置
   logs/
 ```
@@ -234,6 +293,9 @@ codex-weixin
 - 微信凭据永远不返回管理页面。
 - 未知联系人默认拒绝，必须在管理页明确允许。
 - `/bind` 只能选择允许列表内的绝对工作目录。
+- 浏览器仅允许公共 `http(s)` 地址；阻止 localhost、局域网和私有 IP，页面子资源也执行同一检查。
+- 新域名必须确认；上传文件只能来自允许工作目录；提交类点击和上传始终需要单次确认。
+- 浏览器使用独立 profile，登录 Cookie 保存在本机状态目录。不要分享或提交该目录。
 - `danger-full-access` 会绕过 Codex 文件系统 sandbox；只有接受整机访问风险时才启用。
 - 多账号可以并行触发 Codex，会共同占用本机 CPU、内存和 Codex 配额。
 
@@ -254,6 +316,12 @@ npm run build
 ## 参考与许可
 
 项目是独立实现，微信 iLink 接入形态参考 `Tencent/openclaw-weixin`，并参考了公开的 Codex/微信桥接项目在 Codex app-server、媒体传输和安全边界方面的实践。项目未复制 AGPL 项目源码，使用 MIT License。
+
+- 本增强版源码：[WeihaoYYY/codex-from-wechat](https://github.com/WeihaoYYY/codex-from-wechat)
+- 上游项目：[XavierJiezou/codex-weixin](https://github.com/XavierJiezou/codex-weixin)
+- Codex CLI 文档：[OpenAI Codex CLI](https://learn.chatgpt.com/zh-Hans/docs/codex/cli)
+- Codex 登录说明：[OpenAI Authentication](https://learn.chatgpt.com/zh-Hans/docs/auth)
+- Codex App Server：[OpenAI Codex App Server](https://learn.chatgpt.com/zh-Hans/docs/app-server)
 
 版本变更见 [CHANGELOG.md](./CHANGELOG.md)。
 

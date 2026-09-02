@@ -113,7 +113,8 @@ export class AccountManager {
     this.runnerFactory = options.runnerFactory ?? ((config) => new HybridCodexRunner({
       backend: config.codexBackend,
       codexBin: config.codexBin,
-      execSandbox: config.codexExecSandbox
+      execSandbox: config.codexExecSandbox,
+      browser: browserOptions(config)
     }));
   }
 
@@ -161,6 +162,7 @@ export class AccountManager {
     const client = this.clientFactory(account);
     const config = this.configProvider();
     const service = this.bridgeFactory({
+      accountId: account.accountId,
       config,
       stateStore: store,
       weixin: client,
@@ -530,6 +532,18 @@ export class AccountManager {
       sessionCount: store.listSessions().length
     };
   }
+}
+
+function browserOptions(config: CodexWeixinConfig) {
+  return {
+    enabled: config.browserEnabled,
+    userDataDir: config.browserProfileDir,
+    outputDir: config.browserOutputDir,
+    executablePath: config.browserExecutablePath,
+    headless: config.browserHeadless,
+    allowedDomains: config.browserAllowedDomains,
+    allowedWorkspaces: config.allowedWorkspaces
+  };
 }
 
 function requireSession(store: RuntimeStateStore, sessionId: string): ManagedSession {

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>codex-weixin</title>
+  <title>CodeX From WeChat</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
   <script defer src="/vendor/lucide.min.js"></script>
@@ -15,13 +15,13 @@
 <body>
   <header class="app-header">
     <div class="header-inner">
-      <a class="brand" href="#accounts" aria-label="codex-weixin 首页">
+      <a class="brand" href="#accounts" aria-label="CodeX From WeChat 首页">
         <span class="brand-mark" aria-hidden="true">
           <i data-lucide="terminal-square"></i>
           <i data-lucide="message-circle"></i>
         </span>
-        <span class="brand-name">codex-weixin</span>
-        <span class="brand-version" id="productVersion" aria-label="codex-weixin 版本" hidden></span>
+        <span class="brand-name">CodeX From WeChat</span>
+        <span class="brand-version" id="productVersion" aria-label="CodeX From WeChat 版本" hidden></span>
       </a>
       <nav class="view-tabs" aria-label="管理视图">
         <button class="tab is-active" type="button" data-view="accounts">微信账号</button>
@@ -29,7 +29,7 @@
         <button class="tab" type="button" data-view="settings">设置</button>
       </nav>
       <div class="header-actions">
-        <a class="icon-button github-link" href="https://github.com/XavierJiezou/codex-weixin" target="_blank" rel="noopener noreferrer" title="前往 GitHub" aria-label="前往 codex-weixin GitHub 仓库">
+        <a class="icon-button github-link" href="https://github.com/WeihaoYYY/codex-from-wechat" target="_blank" rel="noopener noreferrer" title="前往 GitHub" aria-label="前往 CodeX From WeChat GitHub 仓库">
           <i data-lucide="github"></i>
         </a>
         <button class="button button-primary header-action" id="addAccountButton" type="button" title="添加微信" aria-label="添加微信">
@@ -200,6 +200,42 @@
               </span>
             </label>
           </div>
+        </div>
+        <div class="settings-group">
+          <h2>微信浏览器控制</h2>
+          <p class="field-hint">使用独立浏览器配置，不读取日常 Chrome。新域名、上传文件以及提交类按钮会在微信请求一次性确认。</p>
+          <div class="field-grid">
+            <label class="toggle-field" for="browserEnabledInput">
+              <span>启用浏览器工具</span>
+              <span class="toggle-control">
+                <input id="browserEnabledInput" name="browserEnabled" type="checkbox">
+                <span aria-hidden="true"></span>
+              </span>
+            </label>
+            <label class="toggle-field" for="browserHeadlessInput">
+              <span>无界面运行</span>
+              <span class="toggle-control">
+                <input id="browserHeadlessInput" name="browserHeadless" type="checkbox">
+                <span aria-hidden="true"></span>
+              </span>
+            </label>
+          </div>
+          <label>
+            <span>浏览器程序路径（留空自动查找 Chrome / Edge）</span>
+            <input id="browserExecutablePathInput" name="browserExecutablePath" autocomplete="off">
+          </label>
+          <label>
+            <span>独立登录配置目录</span>
+            <input id="browserProfileDirInput" name="browserProfileDir" autocomplete="off" required>
+          </label>
+          <label>
+            <span>截图输出目录</span>
+            <input id="browserOutputDirInput" name="browserOutputDir" autocomplete="off" required>
+          </label>
+          <label>
+            <span>无需逐次确认的域名（每行一个；留空时每个新域名都在微信确认）</span>
+            <textarea id="browserAllowedDomainsInput" name="browserAllowedDomains" rows="4" placeholder="example.com"></textarea>
+          </label>
         </div>
         <div class="settings-group">
           <h2>版本</h2>

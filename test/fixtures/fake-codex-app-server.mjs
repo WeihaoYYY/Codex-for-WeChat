@@ -6,6 +6,8 @@ const rl = readline.createInterface({ input: process.stdin });
 let initialized = false;
 let nextTurn = 1;
 const activeTurns = new Map();
+const pendingServerRequests = new Map();
+let nextServerRequest = 10_000;
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -32,8 +34,74 @@ function completedTurn(id, status, error = null) {
   };
 }
 
+function finishPrompt(threadId, turnId, prompt) {
+  const progressItemId = `progress-${turnId}`;
+  send({
+    method: "item/started",
+    params: {
+      threadId,
+      turnId,
+      item: { type: "agentMessage", id: progressItemId, text: "", phase: "commentary", memoryCitation: null }
+    }
+  });
+  send({
+    method: "item/agentMessage/delta",
+    params: { threadId, turnId, itemId: progressItemId, delta: `working:${prompt}` }
+  });
+  send({
+    method: "item/completed",
+    params: {
+      threadId,
+      turnId,
+      completedAtMs: Date.now(),
+      item: { type: "agentMessage", id: progressItemId, text: `working:${prompt}`, phase: "commentary", memoryCitation: null }
+    }
+  });
+  const itemId = `item-${turnId}`;
+  send({
+    method: "item/started",
+    params: {
+      threadId,
+      turnId,
+      item: { type: "agentMessage", id: itemId, text: "", phase: "final_answer", memoryCitation: null }
+    }
+  });
+  for (const delta of ["reply:", prompt]) {
+    send({
+      method: "item/agentMessage/delta",
+      params: { threadId, turnId, itemId, delta }
+    });
+  }
+  send({
+    method: "item/completed",
+    params: {
+      threadId,
+      turnId,
+      completedAtMs: Date.now(),
+      item: { type: "agentMessage", id: itemId, text: `reply:${prompt}`, phase: "final_answer", memoryCitation: null }
+    }
+  });
+  send({
+    method: "turn/completed",
+    params: { threadId, turn: completedTurn(turnId, "completed") }
+  });
+  activeTurns.delete(threadId);
+}
+
 rl.on("line", (line) => {
   const message = JSON.parse(line);
+
+  if (!message.method && pendingServerRequests.has(message.id)) {
+    const pending = pendingServerRequests.get(message.id);
+    pendingServerRequests.delete(message.id);
+    if (pending.kind === "approval") {
+      finishPrompt(pending.threadId, pending.turnId, `approval:${message.result?.decision ?? "missing"}`);
+    } else {
+      const text = message.result?.contentItems?.find((item) => item.type === "inputText")?.text ?? "missing";
+      finishPrompt(pending.threadId, pending.turnId, `dynamic:${text}`);
+    }
+    return;
+  }
 
   if (message.method === "initialize") {
     if (message.jsonrpc) {
@@ -64,8 +132,8 @@ rl.on("line", (line) => {
   }
 
   if (message.method === "thread/start") {
-    if (message.params?.approvalPolicy !== "never") {
-      fail(message.id, "approvalPolicy must be never");
+    if (!["never", "on-request"].includes(message.params?.approvalPolicy)) {
+      fail(message.id, "unsupported approvalPolicy");
       return;
     }
     respond(message.id, {
@@ -174,58 +242,62 @@ rl.on("line", (line) => {
     if (prompt === "hold") {
       return;
     }
+    if (prompt === "approval") {
+      const itemId = `command-${turnId}`;
+      send({
+        method: "item/started",
+        params: {
+          threadId: message.params.threadId,
+          turnId,
+          item: { type: "commandExecution", id: itemId, command: "npm test", cwd: "/tmp/project", status: "inProgress", commandActions: [] }
+        }
+      });
+      const requestId = nextServerRequest++;
+      pendingServerRequests.set(requestId, { kind: "approval", threadId: message.params.threadId, turnId });
+      send({
+        id: requestId,
+        method: "item/commandExecution/requestApproval",
+        params: {
+          kind: "command",
+          threadId: message.params.threadId,
+          turnId,
+          itemId,
+          startedAtMs: Date.now(),
+          command: "npm test",
+          cwd: "/tmp/project",
+          availableDecisions: ["accept", "acceptForSession", "decline", "cancel"]
+        }
+      });
+      return;
+    }
+    if (prompt === "dynamic") {
+      const callId = `dynamic-${turnId}`;
+      send({
+        method: "item/started",
+        params: {
+          threadId: message.params.threadId,
+          turnId,
+          item: { type: "dynamicToolCall", id: callId, tool: "snapshot", arguments: {}, status: "inProgress" }
+        }
+      });
+      const requestId = nextServerRequest++;
+      pendingServerRequests.set(requestId, { kind: "dynamic", threadId: message.params.threadId, turnId });
+      send({
+        id: requestId,
+        method: "item/tool/call",
+        params: {
+          threadId: message.params.threadId,
+          turnId,
+          callId,
+          namespace: "weixin_browser",
+          tool: "snapshot",
+          arguments: {}
+        }
+      });
+      return;
+    }
     setTimeout(() => {
-      const progressItemId = `progress-${turnId}`;
-      send({
-        method: "item/started",
-        params: {
-          threadId: message.params.threadId,
-          turnId,
-          item: { type: "agentMessage", id: progressItemId, text: "", phase: "commentary", memoryCitation: null }
-        }
-      });
-      send({
-        method: "item/agentMessage/delta",
-        params: { threadId: message.params.threadId, turnId, itemId: progressItemId, delta: `working:${prompt}` }
-      });
-      send({
-        method: "item/completed",
-        params: {
-          threadId: message.params.threadId,
-          turnId,
-          completedAtMs: Date.now(),
-          item: { type: "agentMessage", id: progressItemId, text: `working:${prompt}`, phase: "commentary", memoryCitation: null }
-        }
-      });
-      const itemId = `item-${turnId}`;
-      send({
-        method: "item/started",
-        params: {
-          threadId: message.params.threadId,
-          turnId,
-          item: { type: "agentMessage", id: itemId, text: "", phase: "final_answer", memoryCitation: null }
-        }
-      });
-      for (const delta of ["reply:", prompt]) {
-        send({
-          method: "item/agentMessage/delta",
-          params: { threadId: message.params.threadId, turnId, itemId, delta }
-        });
-      }
-      send({
-        method: "item/completed",
-        params: {
-          threadId: message.params.threadId,
-          turnId,
-          completedAtMs: Date.now(),
-          item: { type: "agentMessage", id: itemId, text: `reply:${prompt}`, phase: "final_answer", memoryCitation: null }
-        }
-      });
-      send({
-        method: "turn/completed",
-        params: { threadId: message.params.threadId, turn: completedTurn(turnId, "completed") }
-      });
-      activeTurns.delete(message.params.threadId);
+      finishPrompt(message.params.threadId, turnId, prompt);
     }, 5);
     return;
   }
