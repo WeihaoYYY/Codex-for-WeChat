@@ -1,4 +1,4 @@
-<h1 align="center">CodeX From WeChat</h1>
+<h1 align="center">CodeX For WeChat</h1>
 
 <p align="center">
   <img src="src/web/favicon.svg" alt="CodeX From WeChat logo" width="128" height="128" />
