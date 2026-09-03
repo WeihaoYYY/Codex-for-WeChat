@@ -3,7 +3,7 @@ import path from "node:path";
 import { AccessController } from "./access.js";
 import { parseActionBlocks } from "./actions.js";
 import { ApprovalBroker, type ApprovalResolution } from "./approval-broker.js";
-import { isPriorityCommandText, parseCommand } from "./commands.js";
+import { isPriorityCommandText, parseCommand, parseNaturalControllerCommand, type BridgeCommand } from "./commands.js";
 import { buildPrompt, buildPromptPreview, chunkText, parsePrompt } from "./format.js";
 import { PromptBuffer } from "./prompt-buffer.js";
 import type { CodexModelOption, CodexRuntimeInfo } from "../codex/app-server-runner.js";
@@ -14,6 +14,7 @@ import { WeixinApiClient, isStaleContextError, type FetchLike } from "../weixin/
 import { downloadInboundAttachments, InboundMediaTooLargeError, sendLocalMediaFile } from "../weixin/media.js";
 import type { NormalizedWeixinMessage } from "../weixin/messages.js";
 import type { PromptBufferItem } from "./prompt-buffer.js";
+import { ControllerApprovalBroker, type ControllerPause, type ControllerResolution } from "../controller/broker.js";
 
 export type BridgeServiceOptions = {
   accountId?: string;
@@ -25,6 +26,7 @@ export type BridgeServiceOptions = {
   inboundDir?: string;
   mediaFetch?: FetchLike;
   onTurnStatus?: (status: { senderId: string; sessionId: string; active: boolean }) => void;
+  controllerBroker?: ControllerApprovalBroker;
 };
 
 export type ProactiveTaskResult = {
@@ -69,11 +71,25 @@ export class BridgeService {
     this.options.stateStore.setPairedSenderIds(this.access.listPairedSenderIds());
     this.options.stateStore.ensureActiveSession(message.senderId, this.options.config.defaultCwd);
 
+    const naturalControllerCommand = this.activeNaturalControllerCommand(message.senderId, message.text);
+    if (naturalControllerCommand) {
+      await this.flushPendingDeliveries(message.senderId);
+      await this.handleCommand(message, naturalControllerCommand);
+      return;
+    }
     if (isPriorityCommandText(message.text)) {
       await this.handleAuthorizedMessage(message);
       return;
     }
     await this.enqueueSender(message.senderId, () => this.handleAuthorizedMessage(message));
+  }
+
+  private activeNaturalControllerCommand(senderId: string, text: string): BridgeCommand | undefined {
+    const command = parseNaturalControllerCommand(text);
+    const broker = this.options.controllerBroker;
+    if (!command || !broker) return undefined;
+    const hasActivePause = broker.list(senderId).some((pause) => pause.state !== "consumed" && pause.state !== "expired");
+    return hasActivePause ? command : undefined;
   }
 
   private async handleAuthorizedMessage(message: NormalizedWeixinMessage): Promise<void> {
@@ -174,6 +190,9 @@ export class BridgeService {
       case "deny":
         await this.handleApprovalCommand(message.senderId, command.arg, "decline");
         return;
+      case "controller":
+        await this.handleControllerCommand(message.senderId, command.arg);
+        return;
       case "stop":
         this.approvals.cancelForSender(message.senderId);
         await this.runner.stop(this.options.stateStore.getThread(message.senderId));
@@ -182,6 +201,37 @@ export class BridgeService {
       default:
         await this.reply(message.senderId, `Unknown command: /${command.name}. Send /help.`);
     }
+  }
+
+  private async handleControllerCommand(senderId: string, rawArg: string): Promise<void> {
+    const broker = this.options.controllerBroker;
+    if (!broker) {
+      await this.reply(senderId, "Controller 审批通道尚未启用。");
+      return;
+    }
+    const [action = "status", rawId = ""] = rawArg.trim().split(/\s+/, 2);
+    const normalizedAction = action.toLowerCase();
+    if (normalizedAction === "status") {
+      const pauses = broker.list(senderId).filter((pause) => pause.state !== "consumed" && pause.state !== "expired");
+      await this.reply(senderId, pauses.length
+        ? pauses.map(formatControllerPause).join("\n\n")
+        : "当前没有等待处理的 ChatGPT Controller 暂停。");
+      return;
+    }
+    if (normalizedAction !== "continue" && normalizedAction !== "reject") {
+      await this.reply(senderId, "用法：/controller status、/controller continue <C-编号> 或 /controller reject <C-编号>");
+      return;
+    }
+    const pending = broker.list(senderId).filter((pause) => pause.state === "pending");
+    const approvalId = rawId.trim() || (pending.length === 1 ? pending[0].approvalId : "");
+    if (!approvalId) {
+      await this.reply(senderId, pending.length
+        ? "存在多个 Controller 暂停，请在命令中指定 C-编号。"
+        : "当前没有可处理的 Controller 暂停。");
+      return;
+    }
+    const result = broker.decide(senderId, approvalId, normalizedAction === "continue" ? "continue" : "reject");
+    await this.reply(senderId, controllerResolutionMessage(approvalId, normalizedAction, result));
   }
 
   private async handleApprovalCommand(
@@ -678,8 +728,50 @@ function helpText(): string {
     "/approve A1 - approve one pending operation",
     "/approve-session A1 - approve and allow similar operations for this Codex session",
     "/deny A1 - deny one pending operation",
+    "状况 / 状态 / 报告 - 有 Controller 暂停时查看状态",
+    "允许 / 继续 - 只有一个等待项时一次性允许",
+    "拒绝 - 只有一个等待项时拒绝并保持停止",
+    "/controller ... - 多个等待项时按 C-编号精确处理",
     "/stop - interrupt the current Codex task (or send: 停止)"
   ].join("\n");
+}
+
+function formatControllerPause(pause: ControllerPause): string {
+  return [
+    `【ChatGPT Controller ${pause.approvalId}】${controllerStateLabel(pause.state)}`,
+    `原因：${pause.reason}`,
+    `摘要：${pause.summary}`,
+    `指纹：${pause.taskFingerprint.slice(0, 16)}…`,
+    `会话：${pause.conversationPath.split("/").at(-1)}`,
+    pause.state === "pending" ? "继续：回复“允许”或“继续”" : "",
+    pause.state === "pending" ? "拒绝：回复“拒绝”" : "",
+    pause.state === "pending" ? `多个等待项时：允许 ${pause.approvalId} / 拒绝 ${pause.approvalId}` : "",
+    `有效期至：${formatSessionTime(pause.expiresAt)}`
+  ].filter(Boolean).join("\n");
+}
+
+function controllerResolutionMessage(
+  rawId: string,
+  action: string,
+  result: ControllerResolution
+): string {
+  const id = rawId.trim().toUpperCase();
+  if (result.status === "not-found") return `没有找到 Controller 暂停 ${id}，它可能已过期。`;
+  if (result.status === "wrong-sender") return `Controller 暂停 ${id} 不属于当前微信联系人，已拒绝处理。`;
+  if (result.status === "already-decided") return `Controller 暂停 ${id} 已处理，当前状态：${controllerStateLabel(result.pause.state)}。`;
+  return action === "continue"
+    ? `已一次性允许 ${result.pause.approvalId}。Chrome Controller 核验会话和指纹后才会恢复；本命令不会直接向 Codex 重发任务。`
+    : `已拒绝 ${result.pause.approvalId}。ChatGPT Controller 将保持停止。`;
+}
+
+function controllerStateLabel(state: ControllerPause["state"]): string {
+  return ({
+    pending: "等待决定",
+    continued: "已允许，等待 Chrome 核验",
+    rejected: "已拒绝",
+    consumed: "已消费",
+    expired: "已过期"
+  } as const)[state];
 }
 
 function browserOptions(config: CodexWeixinConfig) {

@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import { AccountManager } from "../src/server/account-manager.js";
+import { ControllerApprovalBroker } from "../src/controller/broker.js";
 import { checkCodex, startLocalHttpServer } from "../src/server/http-server.js";
 import { defaultConfig, saveConfig } from "../src/state/config.js";
 import { resolveStatePaths } from "../src/state/paths.js";
@@ -56,6 +57,95 @@ test("account deletion passes the session-history retention choice", async (t) =
     { accountId: "account-one", retainHistory: true },
     { accountId: "account-two", retainHistory: false }
   ]);
+});
+
+test("Controller API requires its own bearer token and consumes a WeChat decision once", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-controller-api-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = resolveStatePaths(root);
+  saveConfig(paths, {
+    ...defaultConfig(root),
+    automationEnabled: true,
+    automationAccountId: "account-one",
+    automationSenderId: "alice@im.wechat"
+  });
+  const controllerBroker = new ControllerApprovalBroker(paths);
+  const notifications: Array<{ text: string; idempotencyKey?: string }> = [];
+  const server = await startLocalHttpServer({
+    paths,
+    accountManager: { controllerBroker } as never,
+    controllerBroker,
+    controllerToken: "controller-secret",
+    automationManager: {
+      async push(input: { text: string; idempotencyKey?: string }) {
+        notifications.push(input);
+        return { job: { id: "job-one" }, duplicate: false };
+      }
+    } as never,
+    port: 0
+  });
+  t.after(() => server.close());
+  const origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop";
+  const input = {
+    conversationPath: "/g/g-p-investment/c/chat-one",
+    taskFingerprint: "a".repeat(64),
+    reason: "USER_AUTHORITY_REQUIRED",
+    marker: "NEXT_TASK_READY",
+    summary: "等待用户决定。"
+  };
+
+  const preflight = await fetch(`${server.url}/api/controller/pauses`, {
+    method: "OPTIONS",
+    headers: { Origin: origin, "Access-Control-Request-Headers": "authorization,content-type" }
+  });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get("access-control-allow-origin"), origin);
+  assert.equal((await fetch(`${server.url}/api/controller/status`)).status, 403);
+
+  const headers = { Authorization: "Bearer controller-secret", "Content-Type": "application/json", Origin: origin };
+  const createdResponse = await fetch(`${server.url}/api/controller/pauses`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(input)
+  });
+  assert.equal(createdResponse.status, 201);
+  const created = await createdResponse.json() as { pause: { approvalId: string; state: string; notifiedAt?: string }; duplicate: boolean };
+  assert.equal(created.duplicate, false);
+  assert.equal(created.pause.state, "pending");
+  assert.ok(created.pause.notifiedAt);
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0].text, /继续：回复“允许”或“继续”/);
+  assert.match(notifications[0].text, new RegExp(`允许 ${created.pause.approvalId}`));
+
+  const duplicateResponse = await fetch(`${server.url}/api/controller/pauses`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(input)
+  });
+  assert.equal(duplicateResponse.status, 200);
+  assert.equal(notifications.length, 1);
+
+  const decision = controllerBroker.decide("alice@im.wechat", created.pause.approvalId, "continue");
+  assert.equal(decision.status, "resolved");
+  const wrongFingerprint = await fetch(`${server.url}/api/controller/pauses/${created.pause.approvalId}?taskFingerprint=${"b".repeat(64)}`, { headers });
+  assert.equal(wrongFingerprint.status, 409);
+  const poll = await fetch(`${server.url}/api/controller/pauses/${created.pause.approvalId}?taskFingerprint=${input.taskFingerprint}`, { headers });
+  const polled = await poll.json() as { pause: { state: string; decisionToken: string } };
+  assert.equal(polled.pause.state, "continued");
+  assert.ok(polled.pause.decisionToken);
+
+  const consumed = await fetch(`${server.url}/api/controller/pauses/${created.pause.approvalId}/consume`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ taskFingerprint: input.taskFingerprint, decisionToken: polled.pause.decisionToken })
+  });
+  assert.equal(consumed.status, 200);
+  const repeated = await fetch(`${server.url}/api/controller/pauses/${created.pause.approvalId}/consume`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ taskFingerprint: input.taskFingerprint, decisionToken: polled.pause.decisionToken })
+  });
+  assert.equal(repeated.status, 409);
 });
 
 test("local API redacts credentials and protects mutations", async (t) => {

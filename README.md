@@ -46,7 +46,7 @@
 
 ### 3. Codex CLI 原生命令
 
-微信端支持 `/status`、`/new`、`/resume`、`/bind`、`/model`、`/effort`、`/stream`、`/prompt start`、`/prompt done`、`/approve`、`/deny` 和 `/stop`，可以管理会话、工作目录、模型、推理强度、过程进度与高风险操作确认。
+微信端支持 `/status`、`/new`、`/resume`、`/bind`、`/model`、`/effort`、`/stream`、`/prompt start`、`/prompt done`、`/approve`、`/deny`、`/controller` 和 `/stop`，可以管理会话、工作目录、模型、推理强度、过程进度与高风险操作确认。
 
 <p align="center">
   <img src="docs/images/screenshots/wechat-cli-commands.png" alt="在微信中使用 Codex CLI 原生命令" width="420" />
@@ -217,6 +217,9 @@ npm start
 /approve A<编号>              批准一次等待中的操作
 /approve-session A<编号>      在当前 Codex 会话中沿用上游支持的授权
 /deny A<编号>                 拒绝等待中的操作
+/controller status            查看绑定到本微信联系人的 ChatGPT Controller 暂停
+/controller continue C-<编号> 一次性允许 Chrome 核验并恢复 ChatGPT 路线判断
+/controller reject C-<编号>   拒绝恢复并让 ChatGPT 自动化保持停止
 /stop                         中断当前 Codex 任务
 ```
 
@@ -295,6 +298,29 @@ ChatGPT 桌面端计划任务也可以运行上面的 `task` 命令。执行本�
 
 当微信上下文凭证过期时，文本结果不会丢失，而是保存在本机待发送队列。你下一次从该微信联系人发来消息后，服务会先刷新凭证并补送积压内容。主动任务的高风险命令和浏览器提交仍会在微信生成 `A1` 形式的一次性审批。
 
+### ChatGPT Controller 暂停审批
+
+`Codex Controller Next Round` v1.4 可以把 fail-closed 暂停登记到本服务，并主动通知“主动任务与通知”中选定的唯一微信联系人。服务会另外生成 `controller-token`，与 `automation-token` 分离；Chrome 扩展只通过 `127.0.0.1` 使用该密钥。
+
+收到 `C-...` 编号后，可以发送：
+
+```text
+状况（也可以说“状态”或“报告”）
+允许（也可以说“继续”）
+拒绝
+```
+
+只有一个等待项时无需输入编号。存在多个等待项时，使用 `允许 C-0123456789AB`、`拒绝 C-0123456789AB`，或继续使用完整的 `/controller` 命令。只有当前联系人确实存在 Controller 暂停时，这些完全匹配的中文短句才会被解释为审批；其他时候仍作为普通消息交给 Codex。
+
+编号绑定微信联系人、ChatGPT 会话路径和任务指纹，默认 24 小时过期且只能消费一次。`continue` 不会直接向 Codex 下发或重发任务：Chrome 会先重新核验原会话和原消息哈希，再开启一个仅用于路线判断的 ChatGPT 回合；只有该回合产生合法的新 marker，下一回合才会向 Codex 派发。浏览器扩展配置时使用：
+
+```text
+Service URL: http://127.0.0.1:18787
+Token file:  E:\Codex\codex-weixin-state\controller-token
+```
+
+不要把 `controller-token` 上传到 GitHub、Notion、聊天记录或截图中。
+
 ## 模型和推理强度
 
 “设置”页面会从 Codex app-server 读取可用模型和各模型支持的推理强度。选择“沿用 Codex 设置”时使用 Codex 自身配置；选择具体模型或推理强度并保存后，后续 Web 和微信消息都会使用该配置。
@@ -318,6 +344,8 @@ IkunCoding 提供方会额外显示 `gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6
   config.json               Codex 和工作区配置
   automation-token          本机主动调用密钥（不要分享）
   automation-jobs.json      主动任务状态、去重键和简短提示预览
+  controller-token          Chrome Controller 专用本机密钥（不要分享）
+  controller-approvals.json ChatGPT 暂停、一次性决定和消费状态
   logs/
 ```
 

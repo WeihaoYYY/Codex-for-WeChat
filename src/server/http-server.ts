@@ -10,6 +10,8 @@ import { z } from "zod";
 
 import { AutomationManager } from "../automation/manager.js";
 import { automationTokenMatches, ensureAutomationToken } from "../automation/token.js";
+import { ControllerApprovalBroker, type ControllerPause } from "../controller/broker.js";
+import { controllerTokenMatches, ensureControllerToken } from "../controller/token.js";
 import { resolveCodexCommand } from "../codex/exec-runner.js";
 import { loadConfig, saveConfig } from "../state/config.js";
 import type { StatePaths } from "../state/paths.js";
@@ -34,6 +36,17 @@ const automationTaskSchema = z.object({
   workspace: z.string().min(1).optional(),
   title: z.string().max(80).optional(),
   idempotencyKey: z.string().max(200).optional()
+});
+const controllerPauseSchema = z.object({
+  conversationPath: z.string().min(1).max(500),
+  taskFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string().regex(/^[A-Z][A-Z0-9_]{1,79}$/),
+  marker: z.string().regex(/^[A-Z][A-Z0-9_]{1,79}$/).optional(),
+  summary: z.string().min(1).max(500)
+});
+const controllerConsumeSchema = z.object({
+  taskFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  decisionToken: z.string().min(20).max(200)
 });
 const sessionPatchSchema = z.object({
   title: z.string().max(80).optional(),
@@ -81,6 +94,8 @@ export type LocalHttpServerOptions = {
   onUpdateInstalled?: (version: string) => void;
   automationManager?: AutomationManager;
   automationToken?: string;
+  controllerBroker?: ControllerApprovalBroker;
+  controllerToken?: string;
 };
 
 export type LocalHttpServer = {
@@ -98,6 +113,8 @@ export async function startLocalHttpServer(options: LocalHttpServerOptions): Pro
   });
   const updateService = options.updateService ?? new UpdateManager({ currentVersion: productVersion });
   const automationToken = options.automationToken ?? ensureAutomationToken(options.paths);
+  const controllerToken = options.controllerToken ?? ensureControllerToken(options.paths);
+  const controllerBroker = options.controllerBroker ?? options.accountManager.controllerBroker ?? new ControllerApprovalBroker(options.paths);
   const automationManager = options.automationManager ?? new AutomationManager({
     paths: options.paths,
     accountManager: options.accountManager
@@ -112,6 +129,8 @@ export async function startLocalHttpServer(options: LocalHttpServerOptions): Pro
       updateService,
       automationToken,
       automationManager,
+      controllerToken,
+      controllerBroker,
       port: actualPort
     }).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
@@ -142,6 +161,8 @@ type HandlerContext = LocalHttpServerOptions & {
   updateService: UpdateService;
   automationToken: string;
   automationManager: AutomationManager;
+  controllerToken: string;
+  controllerBroker: ControllerApprovalBroker;
   port: number;
 };
 
@@ -154,7 +175,20 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
   const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
   const method = request.method ?? "GET";
   const isAutomationRequest = url.pathname.startsWith("/api/automation/");
-  if (isAutomationRequest) {
+  const isControllerRequest = url.pathname.startsWith("/api/controller/");
+  if (isControllerRequest) {
+    setControllerCors(response, request.headers.origin);
+    if (method === "OPTIONS") {
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!controllerTokenMatches(context.controllerToken, bearer)) {
+      sendJson(response, 403, { error: "Invalid Controller token" });
+      return;
+    }
+  } else if (isAutomationRequest) {
     const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
     if (!automationTokenMatches(context.automationToken, bearer)) {
       sendJson(response, 403, { error: "Invalid automation token" });
@@ -169,6 +203,54 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       sendJson(response, 403, { error: "Invalid request token" });
       return;
     }
+  }
+
+  if (method === "GET" && url.pathname === "/api/controller/status") {
+    sendJson(response, 200, { ok: true, product: "codex-weixin-controller", version: context.productVersion });
+    return;
+  }
+  if (method === "POST" && url.pathname === "/api/controller/pauses") {
+    const body = controllerPauseSchema.parse(await readJsonBody(request));
+    const config = loadConfig(context.paths);
+    if (!config.automationEnabled || !config.automationSenderId) {
+      throw new Error("Choose exactly one proactive automation recipient before enabling Controller approvals");
+    }
+    const registered = context.controllerBroker.register(config.automationSenderId, body);
+    if (!registered.pause.notifiedAt) {
+      await context.automationManager.push({
+        text: formatControllerPauseNotification(registered.pause),
+        idempotencyKey: `controller-pause:${registered.pause.approvalId}`
+      });
+      registered.pause = context.controllerBroker.markNotified(registered.pause.approvalId) ?? registered.pause;
+    }
+    sendJson(response, registered.duplicate ? 200 : 201, registered);
+    return;
+  }
+  const controllerPauseMatch = matchPath(url.pathname, "/api/controller/pauses/:approvalId");
+  if (method === "GET" && controllerPauseMatch) {
+    const pause = context.controllerBroker.get(controllerPauseMatch.approvalId);
+    if (!pause) {
+      sendJson(response, 404, { error: "Controller pause not found" });
+      return;
+    }
+    const fingerprint = url.searchParams.get("taskFingerprint")?.toLowerCase();
+    if (!fingerprint || fingerprint !== pause.taskFingerprint) {
+      sendJson(response, 409, { error: "Controller pause fingerprint mismatch" });
+      return;
+    }
+    sendJson(response, 200, { pause });
+    return;
+  }
+  const controllerConsumeMatch = matchPath(url.pathname, "/api/controller/pauses/:approvalId/consume");
+  if (method === "POST" && controllerConsumeMatch) {
+    const body = controllerConsumeSchema.parse(await readJsonBody(request));
+    const result = context.controllerBroker.consume(
+      controllerConsumeMatch.approvalId,
+      body.taskFingerprint,
+      body.decisionToken
+    );
+    sendJson(response, result.status === "consumed" ? 200 : 409, result);
+    return;
   }
 
   if (method === "POST" && url.pathname === "/api/automation/push") {
@@ -503,6 +585,30 @@ function setSecurityHeaders(response: ServerResponse): void {
   response.setHeader("X-Frame-Options", "DENY");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'");
+}
+
+function setControllerCors(response: ServerResponse, origin: string | undefined): void {
+  if (!origin || !/^chrome-extension:\/\/[a-p]{32}$/i.test(origin)) return;
+  response.setHeader("Access-Control-Allow-Origin", origin);
+  response.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  response.setHeader("Vary", "Origin");
+}
+
+function formatControllerPauseNotification(pause: ControllerPause): string {
+  return [
+    `【ChatGPT 自动化已暂停 ${pause.approvalId}】`,
+    `原因：${pause.reason}`,
+    `摘要：${pause.summary}`,
+    `指纹：${pause.taskFingerprint.slice(0, 16)}…`,
+    "",
+    "继续：回复“允许”或“继续”",
+    "拒绝：回复“拒绝”",
+    "状态：回复“状况”“状态”或“报告”",
+    `多个等待项时：允许 ${pause.approvalId} / 拒绝 ${pause.approvalId}`,
+    "",
+    "批准只允许 Chrome Controller 重新核验并发起一次 ChatGPT 评估；不会由微信直接向 Codex 重发任务。"
+  ].join("\n");
 }
 
 function isAllowedHost(host: string | undefined, port: number): boolean {

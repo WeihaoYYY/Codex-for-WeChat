@@ -18,6 +18,8 @@ export type StatePaths = {
   runtimeDir: string;
   automationTokenPath: string;
   automationJobsPath: string;
+  controllerTokenPath: string;
+  controllerApprovalsPath: string;
 };
 
 export function resolveStatePaths(root = defaultStateDir()): StatePaths {
@@ -31,7 +33,9 @@ export function resolveStatePaths(root = defaultStateDir()): StatePaths {
     logsDir: path.join(root, "logs"),
     runtimeDir: path.join(root, "runtime"),
     automationTokenPath: path.join(root, "automation-token"),
-    automationJobsPath: path.join(root, "automation-jobs.json")
+    automationJobsPath: path.join(root, "automation-jobs.json"),
+    controllerTokenPath: path.join(root, "controller-token"),
+    controllerApprovalsPath: path.join(root, "controller-approvals.json")
   };
 }
 

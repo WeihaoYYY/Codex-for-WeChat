@@ -27,6 +27,7 @@ import {
 import { WeixinApiClient } from "../weixin/api.js";
 import { monitorWeixin, type MonitorOptions } from "../weixin/monitor.js";
 import { inferMediaKind, sanitizeFileName } from "../weixin/media.js";
+import { ControllerApprovalBroker } from "../controller/broker.js";
 
 export type AccountRunStatus = "stopped" | "starting" | "running" | "error";
 
@@ -90,9 +91,11 @@ export type AccountManagerOptions = {
   bridgeFactory?: (input: ConstructorParameters<typeof BridgeService>[0]) => BridgeService;
   monitor?: (options: MonitorOptions) => Promise<void>;
   runnerFactory?: (config: CodexWeixinConfig) => HybridCodexRunner;
+  controllerBroker?: ControllerApprovalBroker;
 };
 
 export class AccountManager {
+  readonly controllerBroker: ControllerApprovalBroker;
   private readonly entries = new Map<string, RuntimeEntry>();
   private readonly respondingSessions = new Map<string, number>();
   private readonly configProvider: () => CodexWeixinConfig;
@@ -103,6 +106,7 @@ export class AccountManager {
   private runner?: HybridCodexRunner;
 
   constructor(private readonly options: AccountManagerOptions) {
+    this.controllerBroker = options.controllerBroker ?? new ControllerApprovalBroker(options.paths);
     this.configProvider = options.configProvider ?? (() => loadConfig(options.paths));
     this.clientFactory = options.clientFactory ?? ((account) => new WeixinApiClient({
       baseUrl: account.baseUrl,
@@ -169,7 +173,8 @@ export class AccountManager {
       inboundDir: statePaths.inboundDir,
       runner: this.runnerFor(config),
       listCodexModels: () => this.getCodexModels(),
-      onTurnStatus: ({ sessionId, active }) => this.setSessionResponding(account.accountId, sessionId, active)
+      onTurnStatus: ({ sessionId, active }) => this.setSessionResponding(account.accountId, sessionId, active),
+      controllerBroker: this.controllerBroker
     });
     const entry: RuntimeEntry = { status: "starting", controller, service, store };
     this.entries.set(account.accountId, entry);

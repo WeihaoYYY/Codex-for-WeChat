@@ -5,6 +5,8 @@ import open from "open";
 
 import { runAutomationCli } from "../automation/cli-client.js";
 import { ensureAutomationToken } from "../automation/token.js";
+import { ControllerApprovalBroker } from "../controller/broker.js";
+import { ensureControllerToken } from "../controller/token.js";
 import { resolveStatePaths } from "../state/paths.js";
 import { AccountManager } from "./account-manager.js";
 import { parseCliCommand, serverHelpText } from "./arguments.js";
@@ -17,8 +19,10 @@ async function main(): Promise<void> {
   const port = parsePort(process.env.CODEX_WEIXIN_PORT);
   const paths = resolveStatePaths(stateDir);
   ensureAutomationToken(paths);
+  ensureControllerToken(paths);
   const processLock = acquireServiceProcessLock(paths.root);
-  const accountManager = new AccountManager({ paths });
+  const controllerBroker = new ControllerApprovalBroker(paths);
+  const accountManager = new AccountManager({ paths, controllerBroker });
   let server: Awaited<ReturnType<typeof startLocalHttpServer>> | undefined;
   let shuttingDown = false;
   let restartScheduled = false;
@@ -54,7 +58,7 @@ async function main(): Promise<void> {
     timer.unref();
   };
   try {
-    server = await startLocalHttpServer({ paths, accountManager, port, onUpdateInstalled: scheduleRestart });
+    server = await startLocalHttpServer({ paths, accountManager, controllerBroker, port, onUpdateInstalled: scheduleRestart });
     await accountManager.startAll();
   } catch (error) {
     await accountManager.stopAll();

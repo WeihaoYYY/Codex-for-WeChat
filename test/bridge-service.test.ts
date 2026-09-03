@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { BridgeService } from "../src/bridge/service.js";
+import { ControllerApprovalBroker } from "../src/controller/broker.js";
 import { buildPrompt } from "../src/bridge/format.js";
 import { defaultConfig, MAX_INBOUND_BYTES } from "../src/state/config.js";
 import { resolveStatePaths } from "../src/state/paths.js";
@@ -111,6 +112,61 @@ test("continues a Codex turn after the same WeChat sender approves a pending act
   assert.equal(replies.some((reply) => reply.includes("批准一次：/approve A1")), true);
   assert.equal(replies.some((reply) => reply.includes("已批准 A1")), true);
   assert.equal(replies.includes("decision:accept"), true);
+});
+
+test("handles one-time ChatGPT Controller status, continue, and reject commands", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-controller-command-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const paths = resolveStatePaths(path.join(tmpDir, "state"));
+  const stateStore = new RuntimeStateStore(paths);
+  const controllerBroker = new ControllerApprovalBroker(paths);
+  const replies: string[] = [];
+  const service = new BridgeService({
+    config: { ...defaultConfig(tmpDir), allowedSenderIds: ["alice@im.wechat"] },
+    stateStore,
+    controllerBroker,
+    weixin: {
+      async sendText(input: { text: string }) {
+        replies.push(input.text);
+        return { messageId: "text-message" };
+      }
+    } as never,
+    runner: { async stop() {} } as never
+  });
+  const first = controllerBroker.register("alice@im.wechat", {
+    conversationPath: "/g/g-p-investment/c/chat-one",
+    taskFingerprint: "a".repeat(64),
+    reason: "USER_AUTHORITY_REQUIRED",
+    marker: "NEXT_TASK_READY",
+    summary: "需要用户确认下一阶段。"
+  }).pause;
+
+  const send = (id: string, text: string) => service.handleMessage({
+    id,
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text,
+    raw: {}
+  });
+  await send("status", "状况");
+  assert.match(replies.at(-1) ?? "", new RegExp(first.approvalId));
+  await send("continue", "允许");
+  assert.match(replies.at(-1) ?? "", /一次性允许/);
+  assert.equal(controllerBroker.get(first.approvalId)?.state, "continued");
+  await send("duplicate", `拒绝 ${first.approvalId}`);
+  assert.match(replies.at(-1) ?? "", /已处理/);
+
+  const second = controllerBroker.register("alice@im.wechat", {
+    conversationPath: "/g/g-p-investment/c/chat-one",
+    taskFingerprint: "b".repeat(64),
+    reason: "TERMINAL_BLOCKER",
+    summary: "终止并等待决定。"
+  }).pause;
+  await send("report", "报告");
+  assert.match(replies.at(-1) ?? "", new RegExp(second.approvalId));
+  await send("reject", "拒绝");
+  assert.match(replies.at(-1) ?? "", /已拒绝/);
+  assert.equal(controllerBroker.get(second.approvalId)?.state, "rejected");
 });
 
 test("reports WeChat Codex turn status and resolves runtime details for status", async (t) => {
