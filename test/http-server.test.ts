@@ -146,6 +146,25 @@ test("Controller API requires its own bearer token and consumes a WeChat decisio
     body: JSON.stringify({ taskFingerprint: input.taskFingerprint, decisionToken: polled.pause.decisionToken })
   });
   assert.equal(repeated.status, 409);
+
+  const completedResponse = await fetch(`${server.url}/api/controller/notifications`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      conversationPath: input.conversationPath,
+      taskFingerprint: "c".repeat(64),
+      event: "CODEX_ROUND_VERIFIED_IDLE",
+      taskId: "e67457d0-6cd0-4910-8db7-fff0fcaa05f7",
+      threadId: "019f5b53-043a-7673-b097-0ea2dc820834",
+      roundResult: "supervisor_review",
+      summary: "本轮修复已审查通过并接受。"
+    })
+  });
+  assert.equal(completedResponse.status, 201);
+  assert.equal(notifications.length, 2);
+  assert.match(notifications[1].text, /ChatGPT 自动化已停止/);
+  assert.match(notifications[1].text, /不需要回复“允许”或“拒绝”/);
+  assert.equal(notifications[1].idempotencyKey, `controller-notification:CODEX_ROUND_VERIFIED_IDLE:${"c".repeat(64)}`);
 });
 
 test("local API redacts credentials and protects mutations", async (t) => {

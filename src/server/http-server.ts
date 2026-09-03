@@ -44,6 +44,15 @@ const controllerPauseSchema = z.object({
   marker: z.string().regex(/^[A-Z][A-Z0-9_]{1,79}$/).optional(),
   summary: z.string().min(1).max(500)
 });
+const controllerNotificationSchema = z.object({
+  conversationPath: z.string().min(1).max(500),
+  taskFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  event: z.enum(["CODEX_ROUND_VERIFIED_IDLE", "AUTONOMY_COMPLETE"]),
+  taskId: z.string().min(1).max(200).optional(),
+  threadId: z.string().min(1).max(200).optional(),
+  roundResult: z.string().min(1).max(80).optional(),
+  summary: z.string().min(1).max(500)
+});
 const controllerConsumeSchema = z.object({
   taskFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   decisionToken: z.string().min(20).max(200)
@@ -224,6 +233,19 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse,
       registered.pause = context.controllerBroker.markNotified(registered.pause.approvalId) ?? registered.pause;
     }
     sendJson(response, registered.duplicate ? 200 : 201, registered);
+    return;
+  }
+  if (method === "POST" && url.pathname === "/api/controller/notifications") {
+    const body = controllerNotificationSchema.parse(await readJsonBody(request));
+    const config = loadConfig(context.paths);
+    if (!config.automationEnabled || !config.automationSenderId) {
+      throw new Error("Choose exactly one proactive automation recipient before enabling Controller notifications");
+    }
+    const result = await context.automationManager.push({
+      text: formatControllerCompletionNotification(body),
+      idempotencyKey: `controller-notification:${body.event}:${body.taskFingerprint}`
+    });
+    sendJson(response, result.duplicate ? 200 : 201, result);
     return;
   }
   const controllerPauseMatch = matchPath(url.pathname, "/api/controller/pauses/:approvalId");
@@ -609,6 +631,21 @@ function formatControllerPauseNotification(pause: ControllerPause): string {
     "",
     "批准只允许 Chrome Controller 重新核验并发起一次 ChatGPT 评估；不会由微信直接向 Codex 重发任务。"
   ].join("\n");
+}
+
+function formatControllerCompletionNotification(notification: z.infer<typeof controllerNotificationSchema>): string {
+  const reason = notification.event === "AUTONOMY_COMPLETE"
+    ? "项目路线已完成，ChatGPT 判断当前不需要下一轮任务。"
+    : "本轮 Codex 结果已完成核验，但 ChatGPT 没有授权下一轮任务。";
+  return [
+    "【ChatGPT 自动化已停止】",
+    `原因：${reason}`,
+    notification.taskId ? `Codex task：${notification.taskId}` : "",
+    notification.threadId ? `Codex A thread：${notification.threadId}` : "",
+    notification.roundResult ? `回合结果：${notification.roundResult}` : "",
+    `摘要：${notification.summary}`,
+    "这是完成状态通知，不需要回复“允许”或“拒绝”。"
+  ].filter(Boolean).join("\n");
 }
 
 function isAllowedHost(host: string | undefined, port: number): boolean {

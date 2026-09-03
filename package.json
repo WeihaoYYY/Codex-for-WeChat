@@ -1,6 +1,6 @@
 {
   "name": "codex-weixin",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "description": "Codex for WeChat: a local WeChat bridge with approvals, proactive tasks, and controlled browser work for OpenAI Codex.",
   "license": "MIT",
   "author": "Xuechao Zou",
