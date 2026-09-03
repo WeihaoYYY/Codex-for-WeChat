@@ -57,3 +57,21 @@ test("rejects once and expires unresolved Controller pauses", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("keeps at most one active Controller pause per sender and conversation", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-controller-supersede-"));
+  try {
+    const broker = new ControllerApprovalBroker(resolveStatePaths(root));
+    const first = broker.register("alice", input);
+    const second = broker.register("alice", { ...input, taskFingerprint: "d".repeat(64), reason: "NO_PENDING_MARKER" });
+    assert.equal(second.duplicate, false);
+    assert.equal(broker.get(first.pause.approvalId)?.state, "expired");
+    assert.equal(broker.get(second.pause.approvalId)?.state, "pending");
+    assert.equal(
+      broker.list("alice").filter((pause) => pause.state === "pending" || pause.state === "continued").length,
+      1
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

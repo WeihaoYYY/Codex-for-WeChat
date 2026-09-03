@@ -60,6 +60,14 @@ export class ControllerApprovalBroker {
       && (pause.state === "pending" || pause.state === "continued"));
     if (existing) return { pause: clone(existing), duplicate: true };
     const createdAt = this.now();
+    for (const active of file.pauses) {
+      if (active.senderId === senderId
+        && active.conversationPath === normalized.conversationPath
+        && (active.state === "pending" || active.state === "continued")) {
+        active.state = "expired";
+        delete active.decisionToken;
+      }
+    }
     const pause: ControllerPause = {
       ...normalized,
       approvalId: this.newApprovalId(file.pauses),
@@ -133,6 +141,19 @@ export class ControllerApprovalBroker {
         delete pause.decisionToken;
         changed = true;
       }
+    }
+    const activeConversations = new Set<string>();
+    for (let index = file.pauses.length - 1; index >= 0; index -= 1) {
+      const pause = file.pauses[index];
+      if (pause.state !== "pending" && pause.state !== "continued") continue;
+      const key = `${pause.senderId}\n${pause.conversationPath}`;
+      if (!activeConversations.has(key)) {
+        activeConversations.add(key);
+        continue;
+      }
+      pause.state = "expired";
+      delete pause.decisionToken;
+      changed = true;
     }
     if (file.pauses.length > MAX_RETAINED) {
       file.pauses = file.pauses.slice(-MAX_RETAINED);
