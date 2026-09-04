@@ -17,6 +17,28 @@ async function withMutedConsole<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+test("QR login never writes QR content to stdout", async (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "codex-weixin-login-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const output: string[] = [];
+  const originalLog = console.log;
+  console.log = (...values: unknown[]) => output.push(values.map(String).join(" "));
+  try {
+    await loginWithQr({
+      paths: resolveStatePaths(root),
+      pollMs: 0,
+      timeoutMs: 1000,
+      fetch: async (url) => new Response(JSON.stringify(String(url).includes("get_bot_qrcode")
+        ? { qrcode: "private-qr-token", qrcode_img_content: "private-qr-content" }
+        : { status: "confirmed", bot_token: "bot-secret", ilink_bot_id: "account-1" }))
+    });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal(output.length, 1);
+  assert.doesNotMatch(output[0], /private-qr-token|private-qr-content/);
+});
+
 test("login uses current iLink QR GET endpoints and stores the confirmed account", async (t) => {
   const root = mkdtempSync(path.join(os.tmpdir(), "codex-weixin-login-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));

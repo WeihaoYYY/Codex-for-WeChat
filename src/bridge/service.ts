@@ -15,6 +15,7 @@ import { downloadInboundAttachments, InboundMediaTooLargeError, sendLocalMediaFi
 import type { NormalizedWeixinMessage } from "../weixin/messages.js";
 import type { PromptBufferItem } from "./prompt-buffer.js";
 import { ControllerApprovalBroker, type ControllerPause, type ControllerResolution } from "../controller/broker.js";
+import { safeErrorSummary } from "./error-log.js";
 
 export type BridgeServiceOptions = {
   accountId?: string;
@@ -71,7 +72,7 @@ export class BridgeService {
     this.options.stateStore.setPairedSenderIds(this.access.listPairedSenderIds());
     this.options.stateStore.ensureActiveSession(message.senderId, this.options.config.defaultCwd);
 
-    const naturalControllerCommand = this.activeNaturalControllerCommand(message.senderId, message.text);
+    const naturalControllerCommand = this.naturalControllerCommand(message.text);
     if (naturalControllerCommand) {
       await this.flushPendingDeliveries(message.senderId);
       await this.handleCommand(message, naturalControllerCommand);
@@ -84,12 +85,9 @@ export class BridgeService {
     await this.enqueueSender(message.senderId, () => this.handleAuthorizedMessage(message));
   }
 
-  private activeNaturalControllerCommand(senderId: string, text: string): BridgeCommand | undefined {
+  private naturalControllerCommand(text: string): BridgeCommand | undefined {
     const command = parseNaturalControllerCommand(text);
-    const broker = this.options.controllerBroker;
-    if (!command || !broker) return undefined;
-    const hasActivePause = broker.list(senderId).some((pause) => pause.state !== "consumed" && pause.state !== "expired");
-    return hasActivePause ? command : undefined;
+    return command && this.options.controllerBroker ? command : undefined;
   }
 
   private async handleAuthorizedMessage(message: NormalizedWeixinMessage): Promise<void> {
@@ -335,7 +333,7 @@ export class BridgeService {
       this.options.stateStore.setSessionPromptPreview(session.id, preview);
       return preview;
     } catch (error) {
-      console.warn(`Unable to read Codex history for session ${session.id}: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Unable to read Codex history for a managed session: ${safeErrorSummary(error)}`);
       return "历史摘要暂不可用";
     }
   }
@@ -529,11 +527,11 @@ export class BridgeService {
     this.options.onTurnStatus?.({ senderId: message.senderId, sessionId: session.id, active: true });
     try {
       await this.withTyping(message.senderId, async () => {
-        console.log(`[codex-weixin] starting Codex turn for ${message.senderId} in ${workspace}`);
-        const result = await this.runner.run({
+        console.log("[codex-weixin] starting Codex turn");
+        const run = (candidateThreadId?: string) => this.runner.run({
           prompt: buildPrompt(text, attachments),
           cwd: workspace,
-          threadId,
+          threadId: candidateThreadId,
           model: session.model ?? this.options.config.model,
           effort: session.effort ?? this.options.config.effort,
           sessionKey: `${this.options.accountId ?? "default"}:${message.senderId}:${session.id}`,
@@ -547,7 +545,20 @@ export class BridgeService {
             }
           } : {})
         });
-        console.log(`[codex-weixin] Codex turn completed for ${message.senderId}; text=${result.text.length} chars`);
+        let result;
+        try {
+          result = await run(threadId);
+        } catch (error) {
+          if (!threadId || !isThreadResumeFailure(error)) throw error;
+          console.warn("[codex-weixin] Codex thread resume failed before turn/start; retrying once with a fresh thread");
+          this.options.stateStore.setSessionThread(session.id, "");
+          try {
+            result = await run();
+          } catch (recoveryError) {
+            throw codexSessionRecoveryError(error, recoveryError);
+          }
+        }
+        console.log(`[codex-weixin] Codex turn completed; text=${result.text.length} chars`);
         if (result.threadId) {
           this.options.stateStore.setSessionThread(session.id, result.threadId);
         }
@@ -591,7 +602,7 @@ export class BridgeService {
           typing
         });
       } catch (error) {
-        console.warn(`WeChat typing indicator failed for ${senderId}: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(`WeChat typing indicator failed: ${safeErrorSummary(error)}`);
       }
     };
 
@@ -630,7 +641,7 @@ export class BridgeService {
     try {
       return await (this.options.listCodexModels?.() ?? this.runner.listModels());
     } catch (error) {
-      console.warn(`Codex model list unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Codex model list unavailable: ${safeErrorSummary(error)}`);
       return [];
     }
   }
@@ -642,7 +653,7 @@ export class BridgeService {
     try {
       runtime = await this.runner.getRuntimeInfo(workspace, session?.threadId);
     } catch (error) {
-      console.warn(`Codex runtime info unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      console.warn(`Codex runtime info unavailable: ${safeErrorSummary(error)}`);
     }
     return {
       model: session?.model ?? this.options.config.model ?? runtime.model,
@@ -655,18 +666,18 @@ export class BridgeService {
     const contextToken = this.options.stateStore.getContextToken(senderId);
     if (!contextToken) {
       this.options.stateStore.enqueueDelivery(senderId, text, deliveryId);
-      console.warn(`WeChat context token is unavailable for ${senderId}; reply queued.`);
+      console.warn("WeChat context token is unavailable; reply queued.");
       return "queued";
     }
     try {
-      console.log(`[codex-weixin] sending reply to ${senderId}; text=${text.length} chars`);
+      console.log(`[codex-weixin] sending reply; text=${text.length} chars`);
       await this.options.weixin.sendText({ toUserId: senderId, text, contextToken });
-      console.log(`[codex-weixin] sent reply to ${senderId}`);
+      console.log("[codex-weixin] sent reply");
       return "sent";
     } catch (error) {
       if (isStaleContextError(error)) {
         this.options.stateStore.enqueueDelivery(senderId, text, deliveryId);
-        console.warn(`WeChat context token is stale for ${senderId}; reply queued until the user sends a fresh message.`);
+        console.warn("WeChat context token is stale; reply queued until the user sends a fresh message.");
         return "queued";
       }
       throw error;
@@ -736,6 +747,21 @@ function helpText(): string {
   ].join("\n");
 }
 
+function isThreadResumeFailure(error: unknown): boolean {
+  return /app-server\s+thread\/resume\s+failed/i.test(errorMessage(error));
+}
+
+function codexSessionRecoveryError(resumeError: unknown, recoveryError: unknown): Error {
+  return new Error(
+    `Codex session recovery failed. Resume error: ${errorMessage(resumeError)}. Fresh thread error: ${errorMessage(recoveryError)}`,
+    { cause: recoveryError }
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function formatControllerPause(pause: ControllerPause): string {
   return [
     `【ChatGPT Controller ${pause.approvalId}】${controllerStateLabel(pause.state)}`,
@@ -760,7 +786,7 @@ function controllerResolutionMessage(
   if (result.status === "wrong-sender") return `Controller 暂停 ${id} 不属于当前微信联系人，已拒绝处理。`;
   if (result.status === "already-decided") return `Controller 暂停 ${id} 已处理，当前状态：${controllerStateLabel(result.pause.state)}。`;
   return action === "continue"
-    ? `已一次性允许 ${result.pause.approvalId}。Chrome Controller 核验会话和指纹后才会恢复；本命令不会直接向 Codex 重发任务。`
+    ? `已一次性允许 ${result.pause.approvalId}。ChatGPT-Codex Turn Relay 核验会话和指纹后才会恢复；本命令不会直接向 Codex 重发任务。`
     : `已拒绝 ${result.pause.approvalId}。ChatGPT Controller 将保持停止。`;
 }
 

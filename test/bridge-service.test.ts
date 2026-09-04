@@ -169,6 +169,49 @@ test("handles one-time ChatGPT Controller status, continue, and reject commands"
   assert.equal(controllerBroker.get(second.approvalId)?.state, "rejected");
 });
 
+test("natural Controller commands never fall through to Codex when no pause is pending", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-controller-idle-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const paths = resolveStatePaths(path.join(tmpDir, "state"));
+  const stateStore = new RuntimeStateStore(paths);
+  const controllerBroker = new ControllerApprovalBroker(paths);
+  const replies: string[] = [];
+  let codexRuns = 0;
+  const service = new BridgeService({
+    config: { ...defaultConfig(tmpDir), allowedSenderIds: ["alice@im.wechat"] },
+    stateStore,
+    controllerBroker,
+    weixin: {
+      async sendText(input: { text: string }) {
+        replies.push(input.text);
+        return { messageId: "text-message" };
+      }
+    } as never,
+    runner: {
+      async run() {
+        codexRuns += 1;
+        return { raw: "", text: "must not run", threadId: "unexpected" };
+      },
+      async stop() {}
+    } as never
+  });
+  const send = (id: string, text: string) => service.handleMessage({
+    id,
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text,
+    raw: {}
+  });
+
+  await send("status", "状况");
+  assert.equal(codexRuns, 0);
+  assert.match(replies.at(-1) ?? "", /没有等待处理/);
+
+  await send("continue", "允许");
+  assert.equal(codexRuns, 0);
+  assert.match(replies.at(-1) ?? "", /没有可处理/);
+});
+
 test("reports WeChat Codex turn status and resolves runtime details for status", async (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-status-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -223,6 +266,80 @@ test("reports WeChat Codex turn status and resolves runtime details for status",
   });
   assert.match(replies.at(-1) ?? "", /model: gpt-test/);
   assert.match(replies.at(-1) ?? "", /effort: high/);
+});
+
+test("retries a failed thread resume once with a fresh thread before turn execution", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-resume-fallback-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateStore = new RuntimeStateStore(resolveStatePaths(path.join(tmpDir, "state")));
+  stateStore.ensureActiveSession("alice@im.wechat", tmpDir);
+  stateStore.setThread("alice@im.wechat", "stale-thread");
+  const threadIds: Array<string | undefined> = [];
+  const replies: string[] = [];
+  const service = new BridgeService({
+    config: { ...defaultConfig(tmpDir), allowedSenderIds: ["alice@im.wechat"] },
+    stateStore,
+    weixin: {
+      async sendTyping() {},
+      async sendText(input: { text: string }) {
+        replies.push(input.text);
+        return { messageId: "text-message" };
+      }
+    } as never,
+    runner: {
+      async run(input: { threadId?: string }) {
+        threadIds.push(input.threadId);
+        if (input.threadId) {
+          throw new Error("app-server thread/resume failed (-32600): stale thread");
+        }
+        return { raw: "", text: "已经记下", threadId: "fresh-thread" };
+      },
+      async stop() {}
+    } as never
+  });
+
+  await service.handleMessage({
+    id: "memo-message",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "记一下，下周确认报价",
+    raw: {}
+  });
+
+  assert.deepEqual(threadIds, ["stale-thread", undefined]);
+  assert.equal(stateStore.getThread("alice@im.wechat"), "fresh-thread");
+  assert.deepEqual(replies, ["已经记下"]);
+});
+
+test("does not retry failures that may occur after thread resume", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-no-unsafe-retry-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateStore = new RuntimeStateStore(resolveStatePaths(path.join(tmpDir, "state")));
+  stateStore.ensureActiveSession("alice@im.wechat", tmpDir);
+  stateStore.setThread("alice@im.wechat", "active-thread");
+  let calls = 0;
+  const service = new BridgeService({
+    config: { ...defaultConfig(tmpDir), allowedSenderIds: ["alice@im.wechat"] },
+    stateStore,
+    weixin: { async sendTyping() {} } as never,
+    runner: {
+      async run() {
+        calls += 1;
+        throw new Error("app-server turn/start failed: uncertain execution state");
+      },
+      async stop() {}
+    } as never
+  });
+
+  await assert.rejects(() => service.handleMessage({
+    id: "unsafe-retry",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "执行一次",
+    raw: {}
+  }), /turn\/start failed/);
+  assert.equal(calls, 1);
+  assert.equal(stateStore.getThread("alice@im.wechat"), "active-thread");
 });
 
 test("sends local markdown images as native WeChat image messages", async (t) => {

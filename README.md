@@ -300,7 +300,7 @@ ChatGPT 桌面端计划任务也可以运行上面的 `task` 命令。执行本�
 
 ### ChatGPT Controller 暂停审批
 
-`Codex Controller Next Round` v1.4 可以把 fail-closed 暂停登记到本服务，并主动通知“主动任务与通知”中选定的唯一微信联系人。服务会另外生成 `controller-token`，与 `automation-token` 分离；Chrome 扩展只通过 `127.0.0.1` 使用该密钥。
+`ChatGPT-Codex Turn Relay` 可以把 fail-closed 暂停登记到本服务，并主动通知“主动任务与通知”中选定的唯一微信联系人。ChatGPT 负责路线决策，Turn Relay 只负责验证并提交下一回合。服务会另外生成 `controller-token`，与 `automation-token` 分离；Chrome 扩展只通过 `127.0.0.1` 使用该密钥。
 
 收到 `C-...` 编号后，可以发送：
 
@@ -344,7 +344,7 @@ IkunCoding 提供方会额外显示 `gpt-5.6-sol`、`gpt-5.6-terra` 和 `gpt-5.6
   config.json               Codex 和工作区配置
   automation-token          本机主动调用密钥（不要分享）
   automation-jobs.json      主动任务状态、去重键和简短提示预览
-  controller-token          Chrome Controller 专用本机密钥（不要分享）
+  controller-token          ChatGPT-Codex Turn Relay 专用本机密钥（不要分享）
   controller-approvals.json ChatGPT 暂停、一次性决定和消费状态
   logs/
 ```

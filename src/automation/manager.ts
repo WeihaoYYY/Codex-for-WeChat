@@ -4,6 +4,7 @@ import { isWorkspaceAllowed, loadConfig, type CodexWeixinConfig } from "../state
 import type { StatePaths } from "../state/paths.js";
 import type { AccountManager } from "../server/account-manager.js";
 import { AutomationJobStore, type AutomationJob } from "./job-store.js";
+import { safeErrorSummary } from "../bridge/error-log.js";
 
 export type AutomationRequest = {
   text: string;
@@ -95,7 +96,7 @@ export class AutomationManager {
     } catch (error) {
       const message = errorMessage(error);
       this.jobs.update(jobId, { status: "failed", error: message });
-      console.error(`[codex-weixin] automation task ${jobId} failed: ${message}`);
+      console.error(`[codex-weixin] automation task failed: ${safeErrorSummary(error)}`);
     }
   }
 

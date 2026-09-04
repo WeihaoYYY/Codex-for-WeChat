@@ -2,7 +2,7 @@
 
 更新日期：2026-09-03
 
-本机已部署 Codex for WeChat 与 Codex Controller Next Round。微信可以作为 Codex 的远程任务、审批、文件与自动化控制入口。
+本机已部署 Codex for WeChat 与 ChatGPT-Codex Turn Relay。微信可以作为 Codex 的远程任务、审批、文件与自动化控制入口。ChatGPT 负责项目路线决策；Turn Relay 是独立 Chrome 扩展，只负责验证并提交下一次 ChatGPT 用户回合。
 
 ## 可以做什么
 
@@ -51,7 +51,7 @@
 拒绝 C-0123456789AB
 ```
 
-“允许”不会由微信直接向 Codex 下发或重发任务。Chrome Controller 会先验证微信联系人、审批编号、ChatGPT 会话路径、暂停任务指纹和页面消息哈希，然后消费一次性批准，启动一个只负责路线判断的 ChatGPT 回合。只有该回合产生合法的新 marker，后续独立回合才会向 Codex 派发任务。
+“允许”不会由微信直接向 Codex 下发或重发任务。ChatGPT-Codex Turn Relay 会先验证微信联系人、审批编号、ChatGPT 会话路径、暂停任务指纹和页面消息哈希，然后消费一次性批准，启动一个只负责路线判断的 ChatGPT 回合。只有该回合产生合法的新 marker，后续独立回合才会向 Codex 派发任务。
 
 ## 安全和运行边界
 
@@ -71,5 +71,5 @@ Codex for WeChat source: E:\Codex\codex-weixin
 Private state:            E:\Codex\codex-weixin-state
 Default workspace:        E:\Codex\codex-weixin-workspace
 Local service:            http://127.0.0.1:18787
-Chrome Controller source: E:\GPT-Codex\chatgpt-controller-next-round
+ChatGPT-Codex Turn Relay source: E:\GPT-Codex\.worktrees\controller-v2-20260903
 ```

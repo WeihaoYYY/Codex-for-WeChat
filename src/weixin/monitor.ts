@@ -1,6 +1,7 @@
 import { WeixinApiClient } from "./api.js";
 import { normalizeWeixinMessage, type NormalizedWeixinMessage, type WeixinRawMessage } from "./messages.js";
 import { isPriorityCommandText } from "../bridge/commands.js";
+import { safeErrorSummary } from "../bridge/error-log.js";
 
 export type MonitorOptions = {
   client: WeixinApiClient;
@@ -50,15 +51,15 @@ export async function monitorWeixin(options: MonitorOptions): Promise<void> {
 
   const handleMessage = async (message: NormalizedWeixinMessage): Promise<void> => {
     try {
-      console.log(`[codex-weixin] handling message ${message.id} from ${message.senderId}`);
+      console.log("[codex-weixin] handling inbound message");
       await options.onMessage(message);
-      console.log(`[codex-weixin] handled message ${message.id} from ${message.senderId}`);
+      console.log("[codex-weixin] handled inbound message");
     } catch (error) {
-      console.error(`[codex-weixin] message handling failed for ${message.senderId}: ${errorDetail(error)}`);
+      console.error(`[codex-weixin] message handling failed: ${safeErrorSummary(error)}`);
       try {
         await options.onMessageError?.(error, message);
       } catch (reportError) {
-        console.error(`[codex-weixin] failed to report message error for ${message.senderId}: ${errorDetail(reportError)}`);
+        console.error(`[codex-weixin] failed to record or report message error: ${safeErrorSummary(reportError)}`);
       }
     }
   };
@@ -92,7 +93,7 @@ export async function monitorWeixin(options: MonitorOptions): Promise<void> {
       }
     } catch (error) {
       const retryMs = retryBackoff.next();
-      console.error(`[codex-weixin] monitor poll failed; retrying in ${retryMs}ms: ${errorDetail(error)}`);
+      console.error(`[codex-weixin] monitor poll failed; retrying in ${retryMs}ms: ${safeErrorSummary(error)}`);
       await delay(retryMs, options.signal);
       continue;
     }
@@ -106,14 +107,14 @@ export async function monitorWeixin(options: MonitorOptions): Promise<void> {
       try {
         normalized = normalizeWeixinMessage(raw);
       } catch (error) {
-        console.error(`[codex-weixin] failed to normalize message: ${errorDetail(error)}`);
+        console.error(`[codex-weixin] failed to normalize message: ${safeErrorSummary(error)}`);
         continue;
       }
       if (!normalized) {
         continue;
       }
       if (options.claimMessage && !options.claimMessage(normalized)) {
-        console.log(`[codex-weixin] skipped duplicate message ${normalized.id} from ${normalized.senderId}`);
+        console.log("[codex-weixin] skipped duplicate inbound message");
         continue;
       }
       dispatchMessage(normalized);
@@ -137,10 +138,6 @@ function parseUpdateBatch(value: unknown): { syncKey?: string; messages: WeixinR
   const syncKey = [response.get_updates_buf, response.next_sync_key, response.sync_key]
     .find((candidate): candidate is string => typeof candidate === "string");
   return { syncKey, messages: messages as WeixinRawMessage[] };
-}
-
-function errorDetail(error: unknown): string {
-  return error instanceof Error ? error.stack ?? error.message : String(error);
 }
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {

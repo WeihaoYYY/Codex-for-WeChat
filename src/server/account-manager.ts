@@ -3,10 +3,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { parseActionBlocks } from "../bridge/actions.js";
+import { recordBridgeError } from "../bridge/error-log.js";
 import { buildPrompt, buildPromptPreview, parsePrompt } from "../bridge/format.js";
 import type { PromptBufferItem } from "../bridge/prompt-buffer.js";
 import { BridgeService } from "../bridge/service.js";
-import { userFacingMessageHandlingError } from "../bridge/errors.js";
+import { bridgeErrorCode, userFacingMessageHandlingError, type UserFacingErrorOptions } from "../bridge/errors.js";
 import type { CodexHistoryMessage, CodexModelOption, CodexRuntimeInfo } from "../codex/app-server-runner.js";
 import { HybridCodexRunner } from "../codex/runner.js";
 import { isWorkspaceAllowed, loadConfig, type CodexWeixinConfig } from "../state/config.js";
@@ -188,9 +189,24 @@ export class AccountManager {
       claimMessage: (message) => store.claimProcessedMessage(message.id),
       onMessage: (message) => service.handleMessage(message),
       onMessageError: async (error, message) => {
+        let recorded: UserFacingErrorOptions;
+        try {
+          recorded = recordBridgeError({
+            logsDir: this.options.paths.logsDir,
+            error,
+            event: "wechat-message-handling",
+            accountId: account.accountId,
+            senderId: message.senderId,
+            messageId: message.id,
+            inboundDir: statePaths.inboundDir
+          });
+        } catch (logError) {
+          console.error(`[codex-weixin] unable to persist message error: ${logError instanceof Error ? logError.message : String(logError)}`);
+          recorded = { code: bridgeErrorCode(error) };
+        }
         await client.sendText({
           toUserId: message.senderId,
-          text: userFacingMessageHandlingError(error),
+          text: userFacingMessageHandlingError(error, recorded),
           contextToken: store.getContextToken(message.senderId)
         });
       }

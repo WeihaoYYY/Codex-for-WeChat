@@ -629,7 +629,7 @@ function formatControllerPauseNotification(pause: ControllerPause): string {
     "状态：回复“状况”“状态”或“报告”",
     `多个等待项时：允许 ${pause.approvalId} / 拒绝 ${pause.approvalId}`,
     "",
-    "批准只允许 Chrome Controller 重新核验并发起一次 ChatGPT 评估；不会由微信直接向 Codex 重发任务。"
+    "批准只允许 ChatGPT-Codex Turn Relay 重新核验并发起一次 ChatGPT 评估；不会由微信直接向 Codex 重发任务。"
   ].join("\n");
 }
 

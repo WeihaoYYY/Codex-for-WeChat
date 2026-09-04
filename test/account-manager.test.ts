@@ -110,6 +110,52 @@ test("starts and stops multiple accounts independently", async (t) => {
   await manager.stopAccount("account-two");
 });
 
+test("persists message failures and returns a safe diagnostic reference", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-manager-error-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const paths = resolveStatePaths(root);
+  saveAccount(paths, {
+    accountId: "account-one",
+    userId: "user-account-one",
+    token: "account-token",
+    baseUrl: "https://example.test",
+    cdnBaseUrl: "https://cdn.example.test",
+    savedAt: new Date().toISOString(),
+    enabled: true
+  });
+  let reported!: (text: string) => void;
+  const report = new Promise<string>((resolve) => {
+    reported = resolve;
+  });
+  const manager = new AccountManager({
+    paths,
+    configProvider: () => defaultConfig(root),
+    clientFactory: () => ({
+      async sendText(input: { text: string }) {
+        reported(input.text);
+        return { messageId: "reported" };
+      }
+    }) as never,
+    monitor: async (options) => {
+      await options.onMessageError?.(
+        new Error("app-server thread/resume failed (-32600): stale thread token=private"),
+        { id: "message-private", senderId: "sender-private", text: "记一下", attachments: [], raw: {} }
+      );
+    },
+    runnerFactory: () => ({ close() {} }) as never
+  });
+
+  await manager.startAccount("account-one", false);
+  const message = await report;
+  assert.match(message, /CODEX_SESSION_RESUME_FAILED/);
+  assert.match(message, /WX-\d{8}T\d{6}Z-[A-F0-9]{6}/);
+  assert.doesNotMatch(message, /private|stale thread/);
+  const log = fs.readFileSync(path.join(paths.logsDir, "service-errors.jsonl"), "utf8");
+  assert.match(log, /CODEX_SESSION_RESUME_FAILED/);
+  assert.match(log, /token=<redacted>/);
+  assert.doesNotMatch(log, /message-private|sender-private/);
+});
+
 test("refreshes a running account so new credentials take effect", async (t) => {
   const { manager, starts } = setup(t);
   await manager.startAccount("account-one", false);

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const [parentPidValue, entryPathValue] = process.argv.slice(2);
@@ -11,17 +12,27 @@ if (!Number.isInteger(parentPid) || parentPid <= 0 || !entryPathValue || !fs.exi
 } else {
   await waitForProcessExit(parentPid, 60_000);
   await delay(400);
-  const child = spawn(process.execPath, [entryPath], {
-    detached: true,
-    env: process.env,
-    shell: false,
-    stdio: "ignore",
-    windowsHide: true
-  });
-  child.once("error", () => {
-    process.exitCode = 1;
-  });
-  child.unref();
+  const stateDir = path.resolve(process.env.CODEX_WEIXIN_STATE_DIR || path.join(os.homedir(), ".codex-weixin"));
+  const logsDir = path.join(stateDir, "logs");
+  fs.mkdirSync(logsDir, { recursive: true });
+  const stdoutFd = fs.openSync(path.join(logsDir, "service.stdout.log"), "a");
+  const stderrFd = fs.openSync(path.join(logsDir, "service.stderr.log"), "a");
+  try {
+    const child = spawn(process.execPath, [entryPath], {
+      detached: true,
+      env: process.env,
+      shell: false,
+      stdio: ["ignore", stdoutFd, stderrFd],
+      windowsHide: true
+    });
+    child.once("error", () => {
+      process.exitCode = 1;
+    });
+    child.unref();
+  } finally {
+    fs.closeSync(stdoutFd);
+    fs.closeSync(stderrFd);
+  }
 }
 
 async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
