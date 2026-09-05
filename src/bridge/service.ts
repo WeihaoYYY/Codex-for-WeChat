@@ -99,6 +99,10 @@ export class BridgeService {
       return;
     }
 
+    if (!this.buffers.isActive(message.senderId) && await this.handleNaturalProjectRoute(message)) {
+      return;
+    }
+
     const items = await this.promptItemsFromMessageWithNotice(message);
     if (!items) return;
 
@@ -111,6 +115,76 @@ export class BridgeService {
     }
 
     await this.runCodexTurn(message, "", items);
+  }
+
+  private async handleNaturalProjectRoute(message: NormalizedWeixinMessage): Promise<boolean> {
+    const request = parseNaturalProjectRoute(message.text);
+    if (!request) return false;
+
+    const workspaces = await this.resolveProjectWorkspaces(request.project);
+    if (!workspaces.length) {
+      if (!request.explicit) return false;
+      await this.reply(message.senderId, `没有找到允许访问的项目“${request.project}”。请先在本机管理页把该项目目录加入允许的工作区。`);
+      return true;
+    }
+    if (workspaces.length > 1) {
+      await this.reply(message.senderId, [
+        `项目名“${request.project}”对应多个目录，请使用更完整的项目名：`,
+        ...workspaces.map((workspace) => `- ${workspace}`)
+      ].join("\n"));
+      return true;
+    }
+
+    const workspace = workspaces[0];
+    const session = this.activateOrCreateProjectSession(message.senderId, workspace, request.project);
+    if (!request.prompt) {
+      await this.reply(message.senderId, `已切换到项目：${path.basename(workspace)}\n后面直接说任务即可。`);
+      return true;
+    }
+
+    const routedMessage = { ...message, text: request.prompt };
+    const items = await this.promptItemsFromMessageWithNotice(routedMessage);
+    if (!items) return true;
+    await this.runCodexTurn(routedMessage, "", items, session);
+    return true;
+  }
+
+  private activateOrCreateProjectSession(senderId: string, workspace: string, project: string): ManagedSession {
+    const normalizedWorkspace = path.resolve(workspace).toLowerCase();
+    const existing = this.options.stateStore.listSessions().find((session) => (
+      session.senderId === senderId && path.resolve(session.workspace).toLowerCase() === normalizedWorkspace
+    ));
+    if (existing) {
+      return this.options.stateStore.activateSession(existing.id);
+    }
+    return this.options.stateStore.createSession(senderId, workspace, project);
+  }
+
+  private async resolveProjectWorkspaces(project: string): Promise<string[]> {
+    const label = normalizeProjectKey(project);
+    if (!label) return [];
+    const candidates = new Map<string, string>();
+    const consider = (rawWorkspace: unknown) => {
+      if (typeof rawWorkspace !== "string" || !rawWorkspace.trim()) return;
+      const workspace = path.resolve(rawWorkspace);
+      if (!isWorkspaceAllowed(workspace, this.options.config.allowedWorkspaces)) return;
+      const projectName = normalizeProjectKey(path.basename(workspace));
+      if (projectName !== label && !projectName.startsWith(label)) return;
+      candidates.set(workspace.toLowerCase(), workspace);
+    };
+
+    for (const workspace of this.options.config.allowedWorkspaces) consider(workspace);
+    for (const session of this.options.stateStore.listSessions()) consider(session.workspace);
+    try {
+      const response = await this.runner.listSessions() as Record<string, unknown>;
+      const threads = Array.isArray(response?.data) ? response.data : [];
+      for (const thread of threads) {
+        consider((thread as Record<string, unknown>)?.cwd);
+      }
+    } catch (error) {
+      console.warn(`Unable to discover Codex project workspaces: ${safeErrorSummary(error)}`);
+    }
+    return [...candidates.values()].sort((a, b) => a.localeCompare(b));
   }
 
   async sendProactiveText(senderId: string, text: string, deliveryId?: string): Promise<"sent" | "queued"> {
@@ -254,6 +328,12 @@ export class BridgeService {
     senderId: string,
     request: Parameters<ApprovalBroker["request"]>[1]
   ): Promise<Awaited<ReturnType<ApprovalBroker["request"]>["promise"]>> {
+    if (
+      this.options.config.trustedLocalOperations
+      && (request.kind === "command" || request.kind === "fileChange")
+    ) {
+      return request.allowForSession ? "acceptForSession" : "accept";
+    }
     const pending = this.approvals.request(senderId, request);
     try {
       await this.reply(senderId, formatPendingApproval(pending));
@@ -572,6 +652,7 @@ export class BridgeService {
         for (const action of parsed.actions.send) {
           await this.sendLocalMedia(message.senderId, action);
         }
+        if (await this.reply(message.senderId, "本次任务结束") === "queued") delivery = "queued";
       });
     } finally {
       this.options.onTurnStatus?.({ senderId: message.senderId, sessionId: session.id, active: false });
@@ -630,6 +711,7 @@ export class BridgeService {
       `thread: ${session?.threadId || "(new)"}`,
       `backend: ${this.options.config.codexBackend}`,
       `exec sandbox: ${this.options.config.codexExecSandbox ?? "(Codex default)"}`,
+      `trusted local operations: ${this.options.config.trustedLocalOperations ? "on" : "off"}`,
       `model: ${runtime.model ?? "(Codex default)"}`,
       `effort: ${runtime.effort ?? "(Codex default)"}`,
       `stream replies: ${(session?.streamReplies ?? this.options.config.streamReplies) ? "on" : "off"}${typeof session?.streamReplies === "boolean" ? " (session)" : " (global)"}`,
@@ -726,6 +808,8 @@ export class BridgeService {
 function helpText(): string {
   return [
     "codex-weixin commands:",
+    "项目名：任务 - 一句话切换到该 Codex 项目并执行，例如：身体恢复：总结今天的资料",
+    "切换到项目名 - 用中文切换项目，后续消息直接继续",
     "/help - show commands",
     "/status - show current binding",
     "/bind <absolute-path> - bind this chat to a workspace",
@@ -760,6 +844,51 @@ function codexSessionRecoveryError(resumeError: unknown, recoveryError: unknown)
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+type NaturalProjectRoute = {
+  project: string;
+  prompt?: string;
+  explicit: boolean;
+};
+
+function parseNaturalProjectRoute(text: string): NaturalProjectRoute | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+
+  const switchMatch = /^(?:切换到|进入)\s*(?:项目\s*)?[「『“"]?(.+?)[」』”"]?(?:\s*项目)?$/i.exec(trimmed);
+  if (switchMatch) {
+    const project = cleanProjectLabel(switchMatch[1]);
+    return project ? { project, explicit: true } : undefined;
+  }
+
+  const explicitRoute = /^(?:项目|project)\s+([^：:\r\n]{1,80})\s*[：:]\s*([\s\S]*)$/i.exec(trimmed);
+  if (explicitRoute) {
+    const project = cleanProjectLabel(explicitRoute[1]);
+    const prompt = explicitRoute[2].trim();
+    return project ? { project, ...(prompt ? { prompt } : {}), explicit: true } : undefined;
+  }
+
+  const destinationRoute = /^([\s\S]+?)(?:，?\s*(?:放到|存到|写到|发到|归档到|到))\s*[「『“"]?([^：:\r\n]{1,80})[」』”"]?$/.exec(trimmed);
+  if (destinationRoute) {
+    const prompt = destinationRoute[1].trim();
+    const project = cleanProjectLabel(destinationRoute[2]);
+    return prompt && project ? { project, prompt, explicit: false } : undefined;
+  }
+
+  const shortRoute = /^([^：:\r\n]{1,80})\s*[：:]\s*([\s\S]*)$/.exec(trimmed);
+  if (!shortRoute) return undefined;
+  const project = cleanProjectLabel(shortRoute[1]);
+  const prompt = shortRoute[2].trim();
+  return project ? { project, ...(prompt ? { prompt } : {}), explicit: false } : undefined;
+}
+
+function cleanProjectLabel(value: string): string {
+  return value.trim().replace(/^[「『“"]+|[」』”"]+$/g, "").trim();
+}
+
+function normalizeProjectKey(value: string): string {
+  return cleanProjectLabel(value).toLocaleLowerCase().replace(/[\s_-]+/g, "");
 }
 
 function formatControllerPause(pause: ControllerPause): string {

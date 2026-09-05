@@ -140,6 +140,25 @@ test("routes command approvals to the active turn callback", async (t) => {
   assert.equal(result.text, "reply:approval:accept");
 });
 
+test("pauses the turn execution timeout while waiting for a WeChat approval", async (t) => {
+  const runner = new AppServerCodexRunner({
+    codexBin: path.join(fixturesDir, "fake-codex-app-server.mjs"),
+    requestTimeoutMs: 500
+  });
+  t.after(() => runner.close());
+
+  const result = await runner.run({
+    prompt: "approval",
+    cwd: "/tmp/project",
+    onApproval: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      return "accept";
+    }
+  });
+
+  assert.equal(result.text, "reply:approval:accept");
+});
+
 test("executes client-owned dynamic tools through item/tool/call", async (t) => {
   const runner = new AppServerCodexRunner({
     codexBin: path.join(fixturesDir, "fake-codex-app-server.mjs"),

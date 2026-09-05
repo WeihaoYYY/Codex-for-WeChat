@@ -100,6 +100,7 @@ test("continues a Codex turn after the same WeChat sender approves a pending act
     raw: {}
   });
   await requested;
+  assert.equal(replies.includes("本次任务结束"), false);
   await service.handleMessage({
     id: "approve",
     senderId: "alice@im.wechat",
@@ -112,6 +113,56 @@ test("continues a Codex turn after the same WeChat sender approves a pending act
   assert.equal(replies.some((reply) => reply.includes("批准一次：/approve A1")), true);
   assert.equal(replies.some((reply) => reply.includes("已批准 A1")), true);
   assert.equal(replies.includes("decision:accept"), true);
+  assert.equal(replies.at(-1), "本次任务结束");
+});
+
+test("high-trust mode auto-approves local commands without bypassing the sender boundary", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-trusted-local-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateStore = new RuntimeStateStore(resolveStatePaths(path.join(tmpDir, "state")));
+  const replies: string[] = [];
+  let decision = "";
+  const service = new BridgeService({
+    config: {
+      ...defaultConfig(tmpDir),
+      allowedSenderIds: ["alice@im.wechat"],
+      trustedLocalOperations: true
+    },
+    stateStore,
+    weixin: {
+      async sendText(input: { text: string }) {
+        replies.push(input.text);
+        return { messageId: "text-message" };
+      }
+    } as never,
+    runner: {
+      async run(input: { onApproval?: (request: never) => Promise<string> }) {
+        decision = await input.onApproval?.({
+          kind: "command",
+          threadId: "thread-trusted",
+          turnId: "turn-trusted",
+          itemId: "item-trusted",
+          title: "允许运行本机命令",
+          detail: "命令：npm test",
+          allowForSession: true
+        } as never) ?? "";
+        return { raw: "", text: "done", threadId: "thread-trusted" };
+      },
+      async stop() {}
+    } as never
+  });
+
+  await service.handleMessage({
+    id: "trusted-turn",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "run the tests",
+    raw: {}
+  });
+
+  assert.equal(decision, "acceptForSession");
+  assert.equal(replies.some((reply) => reply.includes("【需要确认 A1】")), false);
+  assert.deepEqual(replies, ["done", "本次任务结束"]);
 });
 
 test("handles one-time ChatGPT Controller status, continue, and reject commands", async (t) => {
@@ -308,7 +359,7 @@ test("retries a failed thread resume once with a fresh thread before turn execut
 
   assert.deepEqual(threadIds, ["stale-thread", undefined]);
   assert.equal(stateStore.getThread("alice@im.wechat"), "fresh-thread");
-  assert.deepEqual(replies, ["已经记下"]);
+  assert.deepEqual(replies, ["已经记下", "本次任务结束"]);
 });
 
 test("does not retry failures that may occur after thread resume", async (t) => {
@@ -940,9 +991,154 @@ test("preserves the tail of a long final answer with bounded WeChat chunks", asy
   });
 
   assert.equal(replies[0], "【进度】正在检索论文。");
-  const finalChunks = replies.slice(1);
+  assert.equal(replies.at(-1), "本次任务结束");
+  const finalChunks = replies.slice(1, -1);
   assert.equal(finalChunks.length, 2);
   assert.equal(finalChunks.every((chunk) => chunk.length <= 1_800), true);
   assert.equal(finalChunks.join(""), finalText);
   assert.match(finalChunks.at(-1) ?? "", /来源：arXiv 官方作者检索。$/);
+});
+
+test("routes a one-line natural-language message to a unique allowed Codex project", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-project-route-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const projectRoot = path.join(tmpDir, "projects");
+  const projectWorkspace = path.join(projectRoot, "身体恢复");
+  const stateStore = new RuntimeStateStore(resolveStatePaths(path.join(tmpDir, "state")));
+  const runs: Array<{ prompt: string; cwd: string; threadId?: string }> = [];
+  const replies: string[] = [];
+  const service = new BridgeService({
+    config: {
+      ...defaultConfig(tmpDir),
+      allowedSenderIds: ["alice@im.wechat"],
+      allowedWorkspaces: [tmpDir, projectRoot]
+    },
+    stateStore,
+    weixin: {
+      async sendTyping() {},
+      async sendText(input: { text: string }) {
+        replies.push(input.text);
+        return { messageId: `text-${replies.length}` };
+      }
+    } as never,
+    runner: {
+      async listSessions() {
+        return { data: [{ cwd: projectWorkspace, name: "恢复计划" }] };
+      },
+      async run(input: { prompt: string; cwd: string; threadId?: string }) {
+        runs.push({ prompt: input.prompt, cwd: input.cwd, threadId: input.threadId });
+        return { raw: "", threadId: "thread-project", text: "项目回复" };
+      },
+      async getRuntimeInfo() {
+        return {};
+      },
+      async stop() {}
+    } as never
+  });
+
+  await service.handleMessage({
+    id: "route-1",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "身体恢复：帮我总结今天的资料",
+    raw: {}
+  });
+  await service.handleMessage({
+    id: "route-2",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "身体恢复：继续给出明天的计划",
+    raw: {}
+  });
+  await service.handleMessage({
+    id: "route-3",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "帮我总结视频内容到身体恢复",
+    raw: {}
+  });
+
+  assert.equal(runs.length, 3);
+  assert.equal(runs[0].cwd, projectWorkspace);
+  assert.match(runs[0].prompt, /帮我总结今天的资料$/);
+  assert.equal(runs[0].threadId, undefined);
+  assert.equal(runs[1].cwd, projectWorkspace);
+  assert.match(runs[1].prompt, /继续给出明天的计划$/);
+  assert.equal(runs[1].threadId, "thread-project");
+  assert.equal(runs[2].cwd, projectWorkspace);
+  assert.match(runs[2].prompt, /帮我总结视频内容$/);
+  assert.equal(runs[2].threadId, "thread-project");
+  assert.equal(stateStore.listSessions().filter((session) => session.workspace === projectWorkspace).length, 1);
+  assert.deepEqual(replies, [
+    "项目回复", "本次任务结束",
+    "项目回复", "本次任务结束",
+    "项目回复", "本次任务结束"
+  ]);
+});
+
+test("switches projects with plain Chinese while leaving unknown colon text as a normal prompt", async (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-project-switch-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const projectRoot = path.join(tmpDir, "projects");
+  const projectWorkspace = path.join(projectRoot, "身体恢复");
+  const stateStore = new RuntimeStateStore(resolveStatePaths(path.join(tmpDir, "state")));
+  const runs: Array<{ prompt: string; cwd: string }> = [];
+  const replies: string[] = [];
+  const service = new BridgeService({
+    config: {
+      ...defaultConfig(tmpDir),
+      allowedSenderIds: ["alice@im.wechat"],
+      allowedWorkspaces: [tmpDir, projectRoot]
+    },
+    stateStore,
+    weixin: {
+      async sendTyping() {},
+      async sendText(input: { text: string }) {
+        replies.push(input.text);
+        return { messageId: `text-${replies.length}` };
+      }
+    } as never,
+    runner: {
+      async listSessions() {
+        return { data: [{ cwd: projectWorkspace, name: "恢复计划" }] };
+      },
+      async run(input: { prompt: string; cwd: string }) {
+        runs.push({ prompt: input.prompt, cwd: input.cwd });
+        return { raw: "", threadId: "thread-project", text: "已处理" };
+      },
+      async getRuntimeInfo() {
+        return {};
+      },
+      async stop() {}
+    } as never
+  });
+
+  await service.handleMessage({
+    id: "switch",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "切换到身体恢复",
+    raw: {}
+  });
+  await service.handleMessage({
+    id: "normal-after-switch",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "继续分析",
+    raw: {}
+  });
+  await service.handleMessage({
+    id: "unknown-colon",
+    senderId: "alice@im.wechat",
+    contextToken: "ctx",
+    text: "错误：网络失败",
+    raw: {}
+  });
+
+  assert.match(replies[0], /已切换到项目：身体恢复/);
+  assert.equal(runs.length, 2);
+  assert.equal(runs[0].cwd, projectWorkspace);
+  assert.match(runs[0].prompt, /继续分析$/);
+  assert.equal(runs[1].cwd, projectWorkspace);
+  assert.match(runs[1].prompt, /错误：网络失败$/);
 });

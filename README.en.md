@@ -41,7 +41,7 @@ Screenshots live under `docs/images/screenshots/`. The Web management screenshot
 | ✅ | WeChat media input | Accepts transcribed voice, images, audio, video, and files up to 100 MiB each, with a direct notice when the limit is exceeded. | Pending: `docs/images/screenshots/wechat-media-input.png` |
 | ✅ | File delivery to WeChat | Codex can return local images, videos, and files as native WeChat messages. | Pending: `docs/images/screenshots/wechat-media-output.png` |
 | ✅ | Models and reasoning effort | Model-aware dropdowns loaded from app-server, including GPT-5.6 Sol, Terra, and Luna for IkunCoding. | Pending: `docs/images/screenshots/web-model-settings.png` |
-| ✅ | Process progress | Enabled by default; Codex progress reaches WeChat immediately and appears in a collapsible Web timeline with elapsed time, while final answers stay intact. | Pending: `docs/images/screenshots/web-process-progress.png` |
+| ✅ | Process progress | Enabled by default; Codex progress reaches WeChat immediately and appears in a collapsible Web timeline with elapsed time. A separate `本次任务结束` marker is sent only after successful completion. | Pending: `docs/images/screenshots/web-process-progress.png` |
 | ✅ | Typing state and deduplication | Web typing state plus persistent sync cursors and message IDs prevent duplicate replies. | Pending: `docs/images/screenshots/wechat-typing.png` |
 | ✅ | App-server first | New and resumed sessions prefer Codex app-server V2 and fall back to `codex exec` when unavailable. | Pending: `docs/images/screenshots/wechat-status.png` |
 | ✅ | WeChat approvals | Sender-bound, one-time `/approve`, `/approve-session`, and `/deny` codes answer command and file-change approval requests. | Pending: `docs/images/screenshots/wechat-approval.png` |
@@ -136,7 +136,11 @@ Edit README.md in the current project, but first tell me what you plan to change
 /stop
 ```
 
-File changes, commands, new domains, uploads, and consequential browser actions may pause for approval. Read the operation summary before choosing `/approve A1` or `/deny A1`.
+File changes, commands, new domains, uploads, and consequential browser actions may pause for approval. Read the operation summary before choosing `/approve A1` or `/deny A1`. Time spent waiting for the WeChat decision is excluded from the Codex execution timeout.
+
+For a trusted single-user installation, enable **Trusted WeChat local operations** and select the `danger-full-access` exec sandbox. This auto-accepts local commands and file changes inside allowed workspace roots. Put `*` in the browser domain list to allow every public website. Private/local addresses remain blocked, and uploads, submissions, publishing, payments, deletions, and other consequential external actions still require one-time approval.
+
+Browser tasks originating from WeChat prefer the persistent `weixin_browser` profile instead of asking the WeChat user to `@Browser` or using the everyday Chrome extension. Cookies are not copied between the Codex built-in browser, everyday Chrome, and the WeChat browser profile; sign in once in the WeChat browser window when a site requires an account.
 
 Repeat the QR flow to add more accounts. Every account has its own monitor, sender authorization, inbound directory, and managed-session state. A failed account does not stop the others. Scanning the same WeChat account again after an expired login refreshes the existing credentials while preserving its local remark, authorization, and sessions instead of creating an empty duplicate. Account removal can retain history: credentials are deleted immediately, while a later scan by the same WeChat user restores the previous remark, authorization, and managed sessions.
 
@@ -154,6 +158,16 @@ The UI uses local remarks instead of treating internal IDs as account names. Exp
 - Delete removes only the bridge record, not Codex's own history files.
 - `/new` creates a new managed session for the current sender.
 - `/resume` lists this sender's sessions with recent prompt summaries, timestamps, and distinct `R1`, `R2` selection codes; `/resume R1` switches back to the selected Codex thread without confusing the code with a title such as `Session 6`.
+
+## Natural project routing
+
+For normal use, no slash command is required. If a Codex project is inside an allowed workspace root, send one message in this form:
+
+```text
+Project folder name: your task
+```
+
+For example, `EazyTech Website: review the homepage` discovers the matching Codex project directory and creates or reuses a separate WeChat-managed session for it. You can also send `切换到 EazyTech Website` and continue with ordinary messages. The bridge does not take over a desktop thread that may already have an active writer.
 
 ## WeChat commands
 
@@ -202,7 +216,9 @@ Only absolute local paths are accepted. Native outbound types are `image`, `vide
 
 The default `codexBackend` is `auto`. On the first Codex message, the service starts one persistent `codex app-server --stdio` process and uses the current `initialize`, `thread/*`, and `turn/*` protocol. New and resumed conversations prefer app-server; startup, handshake, or request failures automatically fall back to `codex exec` or `codex exec resume`.
 
-WeChat turns use `approvalPolicy: "on-request"`. Commands, file changes, new browser domains, uploads, and consequential browser clicks pause and send a sender-bound one-time approval code to WeChat. Reply with `/approve A1`, `/approve-session A1`, or `/deny A1`; codes expire after 10 minutes and `/stop` cancels all approvals for that sender. Browser submissions and uploads cannot be upgraded to session-wide approval.
+WeChat turns use `approvalPolicy: "on-request"`. Commands, file changes, new browser domains, uploads, and consequential browser clicks pause and send a sender-bound one-time approval code to WeChat. Reply with `/approve A1`, `/approve-session A1`, or `/deny A1`; codes expire after 10 minutes, approval waiting time is excluded from the execution timeout, and `/stop` cancels all approvals for that sender. Browser submissions and uploads cannot be upgraded to session-wide approval.
+
+When trusted local operations are enabled, command and file-change requests are accepted automatically without an `A1`; consequential browser actions retain the approval boundary above.
 
 The optional browser tools use an isolated persistent Chrome/Edge profile. Enable them in Settings, then send `/new` because dynamic tools are attached only when a new Codex thread starts. The first visit to a domain requires approval, and the isolated profile must be signed in separately from the user's everyday browser.
 

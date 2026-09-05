@@ -115,7 +115,8 @@ type TurnCompletion = {
 type TurnWaiter = {
   resolve: (value: CodexRunResult) => void;
   reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
+  timer?: NodeJS.Timeout;
+  timeoutMs: number;
 };
 
 type TurnStream = {
@@ -157,6 +158,7 @@ export class AppServerCodexRunner {
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private readonly activeTurns = new Map<string, string>();
   private readonly turnWaiters = new Map<string, TurnWaiter>();
+  private readonly turnTimeoutPauseCounts = new Map<string, number>();
   private readonly turnEvents = new Map<string, string[]>();
   private readonly turnTexts = new Map<string, string>();
   private readonly completedTurns = new Map<string, TurnCompletion>();
@@ -236,7 +238,11 @@ export class AppServerCodexRunner {
 
   async listSessions(): Promise<unknown> {
     await this.ensureConnected();
-    return this.request("thread/list", {});
+    return this.request("thread/list", {
+      limit: 200,
+      sortKey: "updated_at",
+      sortDirection: "desc"
+    });
   }
 
   async getHistory(threadId: string): Promise<CodexHistoryMessage[]> {
@@ -527,12 +533,13 @@ export class AppServerCodexRunner {
     };
     this.activeTurns.delete(threadId);
     const waiter = this.turnWaiters.get(key);
+    this.turnTimeoutPauseCounts.delete(key);
     if (!waiter) {
       this.completedTurns.set(key, completion);
       return;
     }
     this.turnWaiters.delete(key);
-    clearTimeout(waiter.timer);
+    if (waiter.timer) clearTimeout(waiter.timer);
     void this.finishTurn(threadId, key, completion, waiter.resolve, waiter.reject);
   }
 
@@ -548,14 +555,51 @@ export class AppServerCodexRunner {
 
     const timeoutMs = this.options.requestTimeoutMs ?? 600_000;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.turnWaiters.delete(key);
-        const error = new Error(`app-server turn timed out after ${timeoutMs}ms`);
-        reject(error);
-        this.failTransport(error, true);
-      }, timeoutMs);
-      this.turnWaiters.set(key, { resolve, reject, timer });
+      const waiter: TurnWaiter = { resolve, reject, timeoutMs };
+      this.turnWaiters.set(key, waiter);
+      if (!this.turnTimeoutPauseCounts.has(key)) this.armTurnTimeout(key, waiter);
     });
+  }
+
+  private armTurnTimeout(key: string, waiter: TurnWaiter): void {
+    waiter.timer = setTimeout(() => {
+      this.turnWaiters.delete(key);
+      this.turnTimeoutPauseCounts.delete(key);
+      const error = new Error(`app-server turn timed out after ${waiter.timeoutMs}ms`);
+      waiter.reject(error);
+      this.failTransport(error, true);
+    }, waiter.timeoutMs);
+  }
+
+  private pauseTurnTimeout(key: string): void {
+    const count = this.turnTimeoutPauseCounts.get(key) ?? 0;
+    this.turnTimeoutPauseCounts.set(key, count + 1);
+    const waiter = this.turnWaiters.get(key);
+    if (waiter?.timer) {
+      clearTimeout(waiter.timer);
+      waiter.timer = undefined;
+    }
+  }
+
+  private resumeTurnTimeout(key: string): void {
+    const count = this.turnTimeoutPauseCounts.get(key) ?? 0;
+    if (count > 1) {
+      this.turnTimeoutPauseCounts.set(key, count - 1);
+      return;
+    }
+    this.turnTimeoutPauseCounts.delete(key);
+    const waiter = this.turnWaiters.get(key);
+    if (waiter && !waiter.timer) this.armTurnTimeout(key, waiter);
+  }
+
+  private async whileTurnTimeoutPaused<T>(threadId: string, turnId: string, run: () => Promise<T>): Promise<T> {
+    const key = turnKey(threadId, turnId);
+    this.pauseTurnTimeout(key);
+    try {
+      return await run();
+    } finally {
+      this.resumeTurnTimeout(key);
+    }
   }
 
   private async finishTurn(
@@ -638,18 +682,20 @@ export class AppServerCodexRunner {
           return;
         }
         const detail = commandApprovalDetail(params, this.itemDetailsByTurn.get(turnKey(threadId, turnId))?.get(itemId));
-        const decision = await handlers.onApproval({
-          kind: "command",
-          threadId,
-          turnId,
-          itemId,
-          title: typeof params.networkApprovalContext === "object" && params.networkApprovalContext
-            ? "允许此网络访问"
-            : "允许运行本机命令",
-          detail,
-          allowForSession: true
+        await this.whileTurnTimeoutPaused(threadId, turnId, async () => {
+          const decision = await handlers.onApproval?.({
+            kind: "command",
+            threadId,
+            turnId,
+            itemId,
+            title: typeof params.networkApprovalContext === "object" && params.networkApprovalContext
+              ? "允许此网络访问"
+              : "允许运行本机命令",
+            detail,
+            allowForSession: true
+          });
+          this.send({ id, result: { decision: decision ?? "decline" } });
         });
-        this.send({ id, result: { decision } });
         return;
       }
       case "item/fileChange/requestApproval": {
@@ -658,16 +704,18 @@ export class AppServerCodexRunner {
           return;
         }
         const detail = fileApprovalDetail(params, this.itemDetailsByTurn.get(turnKey(threadId, turnId))?.get(itemId));
-        const decision = await handlers.onApproval({
-          kind: "fileChange",
-          threadId,
-          turnId,
-          itemId,
-          title: "允许此文件更改",
-          detail,
-          allowForSession: true
+        await this.whileTurnTimeoutPaused(threadId, turnId, async () => {
+          const decision = await handlers.onApproval?.({
+            kind: "fileChange",
+            threadId,
+            turnId,
+            itemId,
+            title: "允许此文件更改",
+            detail,
+            allowForSession: true
+          });
+          this.send({ id, result: { decision: decision ?? "decline" } });
         });
-        this.send({ id, result: { decision } });
         return;
       }
       case "execCommandApproval":
@@ -739,9 +787,10 @@ export class AppServerCodexRunner {
     }
     for (const [key, waiter] of this.turnWaiters.entries()) {
       this.turnWaiters.delete(key);
-      clearTimeout(waiter.timer);
+      if (waiter.timer) clearTimeout(waiter.timer);
       waiter.reject(error);
     }
+    this.turnTimeoutPauseCounts.clear();
     this.activeTurns.clear();
     this.turnEvents.clear();
     this.turnTexts.clear();

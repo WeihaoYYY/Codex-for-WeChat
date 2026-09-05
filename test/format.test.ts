@@ -12,6 +12,14 @@ test("prompt asks Codex to use native send actions for local media", () => {
   assert.match(prompt, /send me a random video from desktop/);
 });
 
+test("prompt makes WeChat browser work prefer the persistent bridge browser", () => {
+  const prompt = buildPrompt("打开抖音并总结视频");
+
+  assert.match(prompt, /use the weixin_browser namespace whenever it is available/i);
+  assert.match(prompt, /Do not ask the WeChat user to @-mention a desktop browser tab/i);
+  assert.equal(stripBridgeInstructions(prompt), "打开抖音并总结视频");
+});
+
 test("prompt tells Codex to inspect inbound attachment paths", () => {
   const prompt = buildPrompt("analyze this voice", [{
     kind: "audio",

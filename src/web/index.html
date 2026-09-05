@@ -218,6 +218,14 @@
                 <option value="">请选择已授权联系人</option>
               </select>
             </label>
+            <label class="toggle-field" for="trustedLocalOperationsInput">
+              <span>高信任微信本机操作</span>
+              <span class="toggle-control">
+                <input id="trustedLocalOperationsInput" name="trustedLocalOperations" type="checkbox">
+                <span aria-hidden="true"></span>
+              </span>
+              <small class="field-hint">自动允许命令和文件修改；网页提交、上传及其他外部后果操作仍需确认。</small>
+            </label>
           </div>
           <p class="field-hint">本机密钥保存在状态目录，不会显示在网页中。每分钟最多 30 次调用，最多保留 20 个活动任务。</p>
         </div>
@@ -253,8 +261,8 @@
             <input id="browserOutputDirInput" name="browserOutputDir" autocomplete="off" required>
           </label>
           <label>
-            <span>无需逐次确认的域名（每行一个；留空时每个新域名都在微信确认）</span>
-            <textarea id="browserAllowedDomainsInput" name="browserAllowedDomains" rows="4" placeholder="example.com"></textarea>
+            <span>无需逐次确认的域名（每行一个；`*` 表示所有公共网站）</span>
+            <textarea id="browserAllowedDomainsInput" name="browserAllowedDomains" rows="4" placeholder="example.com&#10;或 *"></textarea>
           </label>
         </div>
         <div class="settings-group">

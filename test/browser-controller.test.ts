@@ -4,7 +4,8 @@ import test from "node:test";
 import {
   BROWSER_DYNAMIC_TOOLS,
   isConsequentialBrowserElement,
-  isPrivateAddress
+  isPrivateAddress,
+  matchesDomain
 } from "../src/browser/controller.js";
 
 test("blocks private and loopback network addresses", () => {
@@ -21,6 +22,12 @@ test("requires confirmation for submit-like browser elements", () => {
   assert.equal(isConsequentialBrowserElement({ tag: "button", type: "button", label: "确认支付", href: "" }), true);
   assert.equal(isConsequentialBrowserElement({ tag: "a", type: "", label: "Delete account", href: "https://example.com/delete" }), true);
   assert.equal(isConsequentialBrowserElement({ tag: "a", type: "", label: "Read documentation", href: "https://example.com/docs" }), false);
+});
+
+test("allows every public hostname when the explicit wildcard is configured", () => {
+  assert.equal(matchesDomain("v.douyin.com", ["*"]), true);
+  assert.equal(matchesDomain("example.com", ["*"]), true);
+  assert.equal(matchesDomain("sub.example.com", ["example.com"]), true);
 });
 
 test("exposes only the bounded browser tool set", () => {

@@ -482,6 +482,7 @@ function renderSettings() {
   document.querySelector("#allowedWorkspacesInput").value = (state.config.allowedWorkspaces || []).join("\n");
   document.querySelector("#backendInput").value = state.config.codexBackend || "auto";
   document.querySelector("#sandboxInput").value = state.config.codexExecSandbox || "";
+  document.querySelector("#trustedLocalOperationsInput").checked = Boolean(state.config.trustedLocalOperations);
   document.querySelector("#streamRepliesInput").checked = Boolean(state.config.streamReplies);
   document.querySelector("#automationEnabledInput").checked = Boolean(state.config.automationEnabled);
   renderAutomationTargets();
@@ -1310,6 +1311,7 @@ async function saveSettings(event) {
         allowedWorkspaces: document.querySelector("#allowedWorkspacesInput").value.split("\n").map((line) => line.trim()).filter(Boolean),
         codexBackend: document.querySelector("#backendInput").value,
         codexExecSandbox: document.querySelector("#sandboxInput").value || null,
+        trustedLocalOperations: document.querySelector("#trustedLocalOperationsInput").checked,
         model: document.querySelector("#modelInput").value.trim(),
         effort: document.querySelector("#effortInput").value.trim(),
         streamReplies: document.querySelector("#streamRepliesInput").checked,

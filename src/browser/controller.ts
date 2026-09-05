@@ -438,10 +438,10 @@ export function isPrivateAddress(address: string): boolean {
     || (a === 198 && (b === 18 || b === 19));
 }
 
-function matchesDomain(host: string, domains: string[]): boolean {
+export function matchesDomain(host: string, domains: string[]): boolean {
   return domains.some((raw) => {
     const domain = normalizeDomain(raw);
-    return domain && (host === domain || host.endsWith(`.${domain}`));
+    return domain === "*" || (domain && (host === domain || host.endsWith(`.${domain}`)));
   });
 }
 

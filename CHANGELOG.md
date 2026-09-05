@@ -6,6 +6,10 @@ All notable changes to `codex-weixin` are documented in this file.
 
 ### Added
 
+- Added natural project routing with `Project name: task`, `任务到项目名`, and `切换到项目名`, automatically discovering unique Codex project directories inside the configured workspace allowlist and reusing a separate managed WeChat session.
+- Added a separate `本次任务结束` WeChat marker after each successfully completed Codex turn.
+- Added an explicit trusted-local-operations mode and `*` public-domain wildcard for trusted single-user WeChat deployments.
+- Made WeChat-originated browser prompts prefer the persistent `weixin_browser` profile over desktop browser mentions and Chrome-extension control.
 - Added a localhost-only proactive automation API plus `push`, `task`, and Codex `notify` CLI commands.
 - Added detached proactive Codex sessions, one-recipient targeting, idempotency, rate/queue limits, persistent job status, and deferred delivery when WeChat context expires.
 - Added Web settings for enabling proactive automation and selecting its only authorized recipient.
@@ -18,6 +22,7 @@ All notable changes to `codex-weixin` are documented in this file.
 ### Changed
 
 - Made `/stop` interrupt the active Codex turn immediately and cancel pending approvals for the same sender.
+- Paused the Codex execution timeout while a sender-bound WeChat approval is waiting, then restarted the timeout after the decision.
 - Attached browser tools only to newly created Codex threads and required app-server while browser control is enabled.
 - Renamed the distribution and repository to **Codex for WeChat** while retaining the `codex-weixin` npm package and executable names for compatibility.
 
@@ -31,7 +36,7 @@ All notable changes to `codex-weixin` are documented in this file.
 
 - TypeScript type-check and production build pass.
 - The proactive automation, approval, bridge, app-server, browser-controller, and WeChat-monitor tests pass.
-- The complete suite passes `149/152` on Windows; the remaining three pre-existing failures exercise macOS/Homebrew path and source auto-install fixtures.
+- The complete suite passes `169/172` on Windows; the remaining three pre-existing failures exercise macOS/Homebrew path and source auto-install fixtures.
 
 ## [0.3.8] - 2026-07-20
 

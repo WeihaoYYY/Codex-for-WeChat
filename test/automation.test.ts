@@ -44,7 +44,7 @@ test("proactive Codex tasks use a detached session and flush queued replies afte
   assert.equal(result.delivery, "queued");
   assert.equal(store.getActiveSession("alice@im.wechat")?.id, active.id);
   assert.notEqual(result.sessionId, active.id);
-  assert.equal(store.listPendingDeliveries("alice@im.wechat").length, 1);
+  assert.equal(store.listPendingDeliveries("alice@im.wechat").length, 2);
 
   await service.handleMessage({
     id: "refresh",
@@ -54,6 +54,7 @@ test("proactive Codex tasks use a detached session and flush queued replies afte
     raw: {}
   });
   assert.equal(sent[0], "主动完成");
+  assert.equal(sent[1], "本次任务结束");
   assert.equal(store.listPendingDeliveries("alice@im.wechat").length, 0);
 });
 

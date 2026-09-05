@@ -11,7 +11,17 @@ test("uses ~/.codex-weixin as the default Codex workspace", () => {
   assert.equal(defaultConfig().defaultCwd, path.join(os.homedir(), ".codex-weixin"));
   assert.deepEqual(defaultConfig().allowedWorkspaces, [path.join(os.homedir(), ".codex-weixin")]);
   assert.equal(defaultConfig().streamReplies, true);
+  assert.equal(defaultConfig().trustedLocalOperations, false);
   assert.equal(defaultConfig().maxInboundBytes, 100 * 1024 * 1024);
+});
+
+test("loads explicit high-trust local operation mode", (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-weixin-config-"));
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
+  const paths = resolveStatePaths(stateDir);
+  fs.writeFileSync(paths.configPath, JSON.stringify({ trustedLocalOperations: true }));
+
+  assert.equal(loadConfig(paths, "/tmp/project").trustedLocalOperations, true);
 });
 
 test("migrates the legacy inbound limit and never exceeds 100 MiB", (t) => {

@@ -80,6 +80,10 @@ export class HybridCodexRunner {
     return this.appServer.getHistory(threadId);
   }
 
+  async listSessions(): Promise<unknown> {
+    return this.appServer.listSessions();
+  }
+
   async getRuntimeInfo(cwd: string, threadId?: string): Promise<CodexRuntimeInfo> {
     return this.appServer.getRuntimeInfo(cwd, threadId);
   }
