@@ -9,7 +9,7 @@ All notable changes to `codex-weixin` are documented in this file.
 - Added natural project routing with `Project name: task`, `任务到项目名`, and `切换到项目名`, automatically discovering unique Codex project directories inside the configured workspace allowlist and reusing a separate managed WeChat session.
 - Added a separate `本次任务结束` WeChat marker after each successfully completed Codex turn.
 - Added an explicit trusted-local-operations mode and `*` public-domain wildcard for trusted single-user WeChat deployments.
-- Made WeChat-originated browser prompts prefer the persistent `weixin_browser` profile over desktop browser mentions and Chrome-extension control.
+- Made WeChat-originated browser prompts try the user's existing Chrome session first and retry with the Codex in-app browser when Chrome fails before a consequential action; the local deployment no longer loads the `weixin_browser` tool schema.
 - Added a localhost-only proactive automation API plus `push`, `task`, and Codex `notify` CLI commands.
 - Added detached proactive Codex sessions, one-recipient targeting, idempotency, rate/queue limits, persistent job status, and deferred delivery when WeChat context expires.
 - Added Web settings for enabling proactive automation and selecting its only authorized recipient.

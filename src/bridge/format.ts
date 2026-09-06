@@ -3,8 +3,9 @@ import type { PromptBufferItem } from "./prompt-buffer.js";
 const BRIDGE_ACTION_INSTRUCTIONS = [
   "WeChat bridge rule: when you need to send a local image, video, or file to the user, do not use Markdown local file links.",
   "When a WeChat attachment line includes a local path, inspect the saved local attachment with available tools before answering.",
-  "For browser work requested from WeChat, use the weixin_browser namespace whenever it is available. Prefer it over computer-use, Chrome extensions, or @Browser because it is the bridge's persistent browser profile.",
-  "Do not ask the WeChat user to @-mention a desktop browser tab. If weixin_browser needs login or a consequential-action approval, state that exact requirement in WeChat.",
+  "For browser work requested from WeChat, first use the computer-use skill with the user's existing Google Chrome browser/session so existing site logins can be reused.",
+  "If Chrome is unavailable, access is denied, or it fails before any consequential action, retry once with the Codex in-app browser (browser id iab) when that browser is available.",
+  "Do not ask the WeChat user to @-mention a desktop browser tab. Never retry an uncertain submit, send, publish, purchase, delete, or upload action in another browser; ask for confirmation instead.",
   "Use a fenced codex-weixin-actions JSON block instead, for example:",
   "```codex-weixin-actions",
   "{\"send\":[{\"type\":\"image\",\"path\":\"C:/absolute/path/image.png\"},{\"type\":\"video\",\"path\":\"C:/absolute/path/video.mp4\"}]}",

@@ -12,11 +12,16 @@ test("prompt asks Codex to use native send actions for local media", () => {
   assert.match(prompt, /send me a random video from desktop/);
 });
 
-test("prompt makes WeChat browser work prefer the persistent bridge browser", () => {
+test("prompt tries Chrome and then the Codex in-app browser without the bridge browser", () => {
   const prompt = buildPrompt("打开抖音并总结视频");
 
-  assert.match(prompt, /use the weixin_browser namespace whenever it is available/i);
+  const chrome = prompt.indexOf("existing Google Chrome");
+  const inApp = prompt.indexOf("Codex in-app browser");
+  assert.ok(chrome >= 0);
+  assert.ok(inApp > chrome);
+  assert.doesNotMatch(prompt, /weixin_browser/i);
   assert.match(prompt, /Do not ask the WeChat user to @-mention a desktop browser tab/i);
+  assert.match(prompt, /Never retry an uncertain submit/i);
   assert.equal(stripBridgeInstructions(prompt), "打开抖音并总结视频");
 });
 
